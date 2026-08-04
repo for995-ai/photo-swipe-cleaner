@@ -20,7 +20,7 @@ import { CheckIcon } from '@/components/icons';
 import { AppButton, Body, Caption, Notice, Screen, StatChip } from '@/components/ui';
 import { useCleanup } from '@/hooks/use-cleanup';
 import { useDiscardedResolver } from '@/hooks/use-discarded-resolver';
-import { MAX_TEST_DELETE_COUNT, deletePhotoAssetsAsync } from '@/lib/delete-service';
+import { MAX_DELETE_COUNT_PER_BATCH, deletePhotoAssetsAsync } from '@/lib/delete-service';
 import { formatPhotoDate } from '@/lib/photos';
 import { colors, radius, scaleFont, spacing } from '@/lib/theme';
 
@@ -63,8 +63,8 @@ export default function ReviewScreen() {
     !deleting;
 
   /** 安全上限：超過就停用按鈕。 */
-  const overTestLimit = resolvedCount > MAX_TEST_DELETE_COUNT;
-  const canDelete = readyForDeletion && !overTestLimit;
+  const overBatchLimit = resolvedCount > MAX_DELETE_COUNT_PER_BATCH;
+  const canDelete = readyForDeletion && !overBatchLimit;
 
   /** 待刪除已清空且真的刪過照片 → 顯示成功摘要，並收掉刪除區塊。 */
   const showSuccessSummary = session.discardedCount === 0 && session.deletedCount > 0;
@@ -317,7 +317,7 @@ export default function ReviewScreen() {
               安全刪除模式
             </Text>
             <Caption>
-              {`每次最多確認刪除 ${MAX_TEST_DELETE_COUNT} 張照片，刪除前仍會由 iPhone 再次確認`}
+              {`每次最多確認刪除 ${MAX_DELETE_COUNT_PER_BATCH} 張照片，刪除前仍會由 iPhone 再次確認`}
             </Caption>
 
             {deleting ? (
@@ -327,9 +327,9 @@ export default function ReviewScreen() {
               </View>
             ) : deleteMessage ? (
               <Caption>{deleteMessage}</Caption>
-            ) : overTestLimit ? (
+            ) : overBatchLimit ? (
               <Text style={[styles.dangerHint, { fontSize: scaleFont(12, width) }]}>
-                {`每次最多刪除 ${MAX_TEST_DELETE_COUNT} 張，請先把待刪除減到 ${MAX_TEST_DELETE_COUNT} 張以內`}
+                {`每次最多刪除 ${MAX_DELETE_COUNT_PER_BATCH} 張，請先將待刪除數量減至 ${MAX_DELETE_COUNT_PER_BATCH} 張以內`}
               </Text>
             ) : !readyForDeletion ? (
               <Caption>需先完成解析並處理無法取得的項目，才能刪除。</Caption>
