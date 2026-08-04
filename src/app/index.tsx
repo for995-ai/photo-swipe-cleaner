@@ -4,7 +4,7 @@ import { Alert, StyleSheet, Text, View, useWindowDimensions } from 'react-native
 import { AppButton, Body, Caption, Screen, Title } from '@/components/ui';
 import { useOnboarding } from '@/hooks/use-onboarding';
 import { APP_BUILD_LABEL, APP_NAME, APP_VERSION_LABEL } from '@/lib/app-info';
-import { MAX_TEST_DELETE_COUNT } from '@/lib/delete-service';
+import { MAX_DELETE_COUNT_PER_BATCH } from '@/lib/delete-service';
 import { colors, radius, scaleFont, spacing } from '@/lib/theme';
 
 export default function HomeScreen() {
@@ -55,7 +55,7 @@ export default function HomeScreen() {
           {APP_BUILD_LABEL}
         </Text>
         <Caption>請先使用不重要的照片測試</Caption>
-        <Caption>{`每次最多刪除 ${MAX_TEST_DELETE_COUNT} 張`}</Caption>
+        <Caption>{`每次最多刪除 ${MAX_DELETE_COUNT_PER_BATCH} 張`}</Caption>
       </View>
 
       <View style={styles.footer}>

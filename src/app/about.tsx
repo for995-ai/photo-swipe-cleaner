@@ -3,7 +3,7 @@ import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { AppButton, Body, Caption, Screen, Title } from '@/components/ui';
 import { APP_BUILD_LABEL, APP_NAME } from '@/lib/app-info';
-import { MAX_TEST_DELETE_COUNT } from '@/lib/delete-service';
+import { MAX_DELETE_COUNT_PER_BATCH } from '@/lib/delete-service';
 import { colors, radius, scaleFont, spacing } from '@/lib/theme';
 
 const POINTS: { title: string; detail: string }[] = [
@@ -21,7 +21,7 @@ const POINTS: { title: string; detail: string }[] = [
   },
   {
     title: '真正刪除需要確認頁與 iPhone 系統確認',
-    detail: `要先在確認頁檢查待刪除清單，按下刪除後 iPhone 還會再要求一次確認。每次最多 ${MAX_TEST_DELETE_COUNT} 張。`,
+    detail: `要先在確認頁檢查待刪除清單，按下刪除後 iPhone 還會再要求一次確認。每次最多 ${MAX_DELETE_COUNT_PER_BATCH} 張。`,
   },
   {
     title: '已刪除照片可前往「最近刪除」查看',

@@ -1,9 +1,9 @@
 /**
- * Phase 4A：全專案唯一允許呼叫 MediaLibrary.deleteAssetsAsync 的模組。
+ * 全專案唯一允許呼叫 MediaLibrary.deleteAssetsAsync 的模組。
  *
  * 規則：
  * - 呼叫端（Review 頁）不得直接接觸 MediaLibrary。
- * - 一次最多 MAX_TEST_DELETE_COUNT 張，服務層自己也會再擋一次，
+ * - 一次最多 MAX_DELETE_COUNT_PER_BATCH 張，服務層自己也會再擋一次，
  *   即使 UI 條件被繞過也不可能大量刪除。
  * - 只呼叫一次 deleteAssetsAsync，避免連續彈出多個 iOS 系統確認視窗。
  * - 只有嚴格 === true 才算成功，其餘一律不動任何資料。
@@ -15,8 +15,8 @@ import { deleteAssetsAsync } from 'expo-media-library';
 
 import { describeError } from '@/lib/photos';
 
-/** Phase 4A 安全上限。 */
-export const MAX_TEST_DELETE_COUNT = 5;
+/** 單次批次刪除的安全上限（Beta 0.2）。 */
+export const MAX_DELETE_COUNT_PER_BATCH = 20;
 
 export type DeleteOutcome =
   /** iOS 回報成功刪除。 */
@@ -42,10 +42,10 @@ export async function deletePhotoAssetsAsync(ids: string[]): Promise<DeleteOutco
   if (unique.length === 0) {
     return { status: 'failed', message: '沒有可刪除的照片，照片清單沒有變更' };
   }
-  if (unique.length > MAX_TEST_DELETE_COUNT) {
+  if (unique.length > MAX_DELETE_COUNT_PER_BATCH) {
     return {
       status: 'failed',
-      message: `每次最多刪除 ${MAX_TEST_DELETE_COUNT} 張照片，照片清單沒有變更`,
+      message: `每次最多刪除 ${MAX_DELETE_COUNT_PER_BATCH} 張照片，照片清單沒有變更`,
     };
   }
 
