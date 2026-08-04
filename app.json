@@ -1,18 +1,22 @@
 {
   "expo": {
-    "name": "PhotoSwipeCleaner",
+    "name": "相簿滑滑整理",
     "slug": "PhotoSwipeCleaner",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "photoswipecleaner",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "「相簿滑滑整理」需要讀取你的照片，才能讓你逐張瀏覽並整理。照片只會在這台裝置上處理，不會上傳。",
+        "NSPhotoLibraryAddUsageDescription": "「相簿滑滑整理」不會新增照片到你的相簿。"
+      }
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0E1014",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -26,17 +30,24 @@
     "plugins": [
       "expo-router",
       [
+        "expo-media-library",
+        {
+          "photosPermission": "「相簿滑滑整理」需要讀取你的照片，才能讓你逐張瀏覽並整理。照片只會在這台裝置上處理，不會上傳。",
+          "savePhotosPermission": "「相簿滑滑整理」不會新增照片到你的相簿。",
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
+      [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#0E1014",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
       ]
     ],
     "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
+      "typedRoutes": true
     }
   }
 }
