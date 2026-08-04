@@ -16,6 +16,7 @@ import {
   PermissionStatus,
   SortBy,
   addListener,
+  getAlbumsAsync,
   getAssetInfoAsync,
   getAssetsAsync,
   getPermissionsAsync,
@@ -25,6 +26,12 @@ import {
 } from 'expo-media-library';
 
 import { maybeFailAssetInfo, maybeFailLoadMore } from '@/lib/debug-flags';
+import {
+  SCREENSHOT_SUPPORTED,
+  monthRange,
+  recentRangeStart,
+  type CleanupScope,
+} from '@/lib/scope';
 
 /** 每頁讀取的照片數。整個相簿靠分頁逐批取得，不會一次載入全部。 */
 export const PHOTO_PAGE_SIZE = 60;
@@ -108,13 +115,46 @@ export type PhotoPage = {
   totalCount: number;
 };
 
+const EMPTY_PAGE: PhotoPage = { photos: [], endCursor: '', hasNextPage: false, totalCount: 0 };
+
 /**
- * 讀取一頁照片：排除影片、依建立時間由新到舊。
+ * 把整理範圍轉成 getAssetsAsync 的額外查詢條件。
+ * 回傳 null 代表這個範圍在此裝置上無法可靠查詢，呼叫端必須回空頁，
+ * 絕對不能退化成「所有照片」。
+ */
+function scopeQuery(scope: CleanupScope): Record<string, unknown> | null {
+  switch (scope.type) {
+    case 'all':
+      return {};
+    case 'screenshots':
+      // PhotoKit 的 mediaSubtypes 是資產自身的 metadata，不是用檔名猜的。
+      return SCREENSHOT_SUPPORTED ? { mediaSubtypes: ['screenshot'] } : null;
+    case 'recent30Days':
+      return { createdAfter: recentRangeStart() };
+    case 'month': {
+      const range = monthRange(scope.month);
+      return range ? { createdAfter: range.createdAfter, createdBefore: range.createdBefore } : null;
+    }
+    case 'album':
+      return { album: scope.albumId };
+  }
+}
+
+/**
+ * 讀取一頁照片：排除影片、依建立時間由新到舊，並套用整理範圍。
  * 傳入上一頁的 endCursor 就會接著往下讀，不會重讀已取得的照片。
  */
-export async function loadPhotoPageAsync(after?: string): Promise<PhotoPage> {
+export async function loadPhotoPageAsync(
+  scope: CleanupScope,
+  after?: string
+): Promise<PhotoPage> {
   if (after) {
     maybeFailLoadMore();
+  }
+
+  const extra = scopeQuery(scope);
+  if (extra === null) {
+    return EMPTY_PAGE;
   }
 
   const page = await getAssetsAsync({
@@ -123,6 +163,7 @@ export async function loadPhotoPageAsync(after?: string): Promise<PhotoPage> {
     mediaType: [MediaType.photo],
     // 第二個元素 false 代表遞減，也就是由新到舊。
     sortBy: [[SortBy.creationTime, false]],
+    ...extra,
     ...(after ? { after } : {}),
   });
 
@@ -138,6 +179,66 @@ export async function loadPhotoPageAsync(after?: string): Promise<PhotoPage> {
     hasNextPage: page.hasNextPage,
     totalCount: page.totalCount,
   };
+}
+
+/**
+ * 確認某個相簿是否還存在且可存取。
+ *
+ * 這一步不能省：iOS 原生在 album id 找不到時會把 collection 當成 nil，
+ * 走的是「未指定相簿」的分支，也就是靜默回傳整個相簿的照片而不是拋錯。
+ * 所以必須用 getAlbumsAsync() 明確比對 id，才能判定相簿真的不見了。
+ *
+ * 查詢本身失敗會 throw，呼叫端要當成「暫時無法確認」，不可判定為已刪除。
+ */
+export async function isAlbumAvailableAsync(albumId: string): Promise<boolean> {
+  const albums = await getAlbumsAsync({ includeSmartAlbums: false });
+  return albums.some((album) => album.id === albumId);
+}
+
+export type PhotoAlbum = {
+  id: string;
+  title: string;
+  /** 該相簿內的「照片」張數（不含影片）。 */
+  photoCount: number;
+};
+
+const ALBUM_COUNT_CONCURRENCY = 4;
+
+/**
+ * 列出使用者可存取的相簿（不含系統智慧相簿），並附上實際照片張數。
+ *
+ * album.assetCount 包含影片，所以逐一用 first: 1 的查詢取 totalCount，
+ * 併發上限 4 避免一次打太多。照片數為 0 的相簿會被濾掉。
+ */
+export async function loadPhotoAlbumsAsync(): Promise<PhotoAlbum[]> {
+  const albums = await getAlbumsAsync({ includeSmartAlbums: false });
+
+  const result: PhotoAlbum[] = [];
+  let cursor = 0;
+
+  const worker = async () => {
+    while (cursor < albums.length) {
+      const index = cursor;
+      cursor += 1;
+      const album = albums[index];
+      try {
+        const probe = await getAssetsAsync({
+          first: 1,
+          album: album.id,
+          mediaType: [MediaType.photo],
+        });
+        if (probe.totalCount > 0) {
+          result.push({ id: album.id, title: album.title, photoCount: probe.totalCount });
+        }
+      } catch {
+        // 個別相簿讀取失敗就跳過，不要讓整份清單失敗。
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: ALBUM_COUNT_CONCURRENCY }, () => worker()));
+
+  return result.sort((a, b) => b.photoCount - a.photoCount || a.title.localeCompare(b.title));
 }
 
 /**

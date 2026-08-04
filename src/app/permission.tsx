@@ -82,7 +82,8 @@ export default function PermissionScreen() {
 
       <View style={styles.actions}>
         {access?.level === 'full' || access?.level === 'limited' ? (
-          <AppButton label="開始瀏覽照片" onPress={() => router.push('/photos')} />
+          // 授權完成後回到範圍選擇，不直接進整理頁。
+          <AppButton label="選擇整理範圍" onPress={() => router.replace('/scope')} />
         ) : (
           <AppButton
             label={requesting ? '正在請求權限…' : '允許存取'}

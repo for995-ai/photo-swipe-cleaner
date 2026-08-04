@@ -10,6 +10,7 @@ import {
   type PhotoPage,
   type RecentPhoto,
 } from '@/lib/photos';
+import { scopeKey, type CleanupScope } from '@/lib/scope';
 
 export type PhotoAccessController = {
   /** null 代表還在查詢中，尚未知道狀態。 */
@@ -111,7 +112,12 @@ export type PhotoPager = {
  * 分頁讀取整個已授權的相簿。
  * 同一時間只允許一個請求在飛，且 hasNextPage 為 false 後不再發出請求。
  */
-export function usePhotoPager(enabled: boolean): PhotoPager {
+export function usePhotoPager(enabled: boolean, scope: CleanupScope): PhotoPager {
+  // 範圍變了就整批重讀；分頁演算法本身完全不變。
+  const activeScopeKey = scopeKey(scope);
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+
   const [photos, setPhotos] = useState<RecentPhoto[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [hasNextPage, setHasNextPage] = useState(false);
@@ -178,7 +184,7 @@ export function usePhotoPager(enabled: boolean): PhotoPager {
     setLoadingFirstPage(true);
     inFlight.current = true;
 
-    loadPhotoPageAsync()
+    loadPhotoPageAsync(scopeRef.current)
       .then((page) => {
         if (!cancelled) {
           appendPage(page);
@@ -199,7 +205,7 @@ export function usePhotoPager(enabled: boolean): PhotoPager {
     return () => {
       cancelled = true;
     };
-  }, [enabled, generation, appendPage]);
+  }, [enabled, generation, activeScopeKey, appendPage]);
 
   const loadMore = useCallback(() => {
     if (!enabled || inFlight.current || !moreAvailable.current || !cursor.current) {
@@ -210,7 +216,7 @@ export function usePhotoPager(enabled: boolean): PhotoPager {
     setIsLoadingMore(true);
     setLoadMoreError(null);
 
-    loadPhotoPageAsync(cursor.current)
+    loadPhotoPageAsync(scopeRef.current, cursor.current)
       .then((page) => {
         if (alive.current) {
           appendPage(page);

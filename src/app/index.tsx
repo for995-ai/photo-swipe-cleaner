@@ -1,16 +1,40 @@
 import { useRouter } from 'expo-router';
+import { useState } from 'react';
 import { Alert, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { AppButton, Body, Caption, Screen, Title } from '@/components/ui';
 import { useOnboarding } from '@/hooks/use-onboarding';
 import { APP_BUILD_LABEL, APP_NAME, APP_VERSION_LABEL } from '@/lib/app-info';
 import { MAX_DELETE_COUNT_PER_BATCH } from '@/lib/delete-service';
+import { getPhotoAccessAsync } from '@/lib/photos';
 import { colors, radius, scaleFont, spacing } from '@/lib/theme';
 
 export default function HomeScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
   const onboarding = useOnboarding();
+  const [checking, setChecking] = useState(false);
+
+  /**
+   * 只「查詢」既有權限來決定下一頁，不會請求權限，
+   * 所以按下這顆按鈕不會跳出系統權限視窗。
+   */
+  const handleStart = async () => {
+    if (checking) {
+      return;
+    }
+    setChecking(true);
+    try {
+      const access = await getPhotoAccessAsync();
+      const readable = access.level === 'full' || access.level === 'limited';
+      router.push(readable ? '/scope' : '/permission');
+    } catch {
+      // 查不到狀態就走權限頁，由使用者自己按「允許存取」。
+      router.push('/permission');
+    } finally {
+      setChecking(false);
+    }
+  };
 
   const confirmResetOnboarding = () => {
     Alert.alert(
@@ -62,7 +86,11 @@ export default function HomeScreen() {
         <View style={styles.privacy}>
           <Caption>照片只在你的裝置上處理，不會上傳</Caption>
         </View>
-        <AppButton label="開始整理" onPress={() => router.push('/permission')} />
+        <AppButton
+          label={checking ? '正在確認權限…' : '開始整理'}
+          disabled={checking}
+          onPress={() => void handleStart()}
+        />
         <View style={styles.linkRow}>
           <View style={styles.linkSlot}>
             <AppButton label="關於與隱私" variant="ghost" onPress={() => router.push('/about')} />
