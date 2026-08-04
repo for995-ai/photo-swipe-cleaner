@@ -45,7 +45,7 @@ export async function deletePhotoAssetsAsync(ids: string[]): Promise<DeleteOutco
   if (unique.length > MAX_TEST_DELETE_COUNT) {
     return {
       status: 'failed',
-      message: `安全測試階段一次最多刪除 ${MAX_TEST_DELETE_COUNT} 張，照片清單沒有變更`,
+      message: `每次最多刪除 ${MAX_TEST_DELETE_COUNT} 張照片，照片清單沒有變更`,
     };
   }
 

@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 
 import { CheckIcon, TrashIcon, UndoIcon } from '@/components/icons';
+import { OnboardingModal } from '@/components/onboarding-modal';
 import { SwipeCard, type SwipeCardHandle } from '@/components/swipe-card';
 import {
   ActionButton,
@@ -25,6 +26,7 @@ import {
   StatChip,
 } from '@/components/ui';
 import { useCleanup } from '@/hooks/use-cleanup';
+import { useOnboarding } from '@/hooks/use-onboarding';
 import { PREFETCH_THRESHOLD } from '@/hooks/use-photo-library';
 import { formatPhotoDate } from '@/lib/photos';
 import type { Decision } from '@/lib/session';
@@ -37,6 +39,8 @@ export default function PhotosScreen() {
   // 所以進出確認頁不會重新讀取相簿，也不會清掉整理進度。
   const { access, granted, pager, session } = useCleanup();
   const accessLevel = access.access?.level;
+
+  const onboarding = useOnboarding();
 
   const cardRef = useRef<SwipeCardHandle>(null);
   const [busy, setBusy] = useState(false);
@@ -257,6 +261,9 @@ export default function PhotosScreen() {
           </View>
         </View>
       </View>
+
+      {/* 首次使用教學：只在還沒看過時顯示。 */}
+      <OnboardingModal visible={onboarding.completed === false} onDone={onboarding.complete} />
     </Screen>
   );
 }

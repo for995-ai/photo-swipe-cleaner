@@ -62,13 +62,13 @@ export default function ReviewScreen() {
     !resolution.resolving &&
     !deleting;
 
-  /** Phase 4A 安全上限：超過就停用按鈕。 */
+  /** 安全上限：超過就停用按鈕。 */
   const overTestLimit = resolvedCount > MAX_TEST_DELETE_COUNT;
   const canDelete = readyForDeletion && !overTestLimit;
 
   /** 待刪除已清空且真的刪過照片 → 顯示成功摘要，並收掉刪除區塊。 */
   const showSuccessSummary = session.discardedCount === 0 && session.deletedCount > 0;
-  /** 沒有待刪除項目時就不要顯示「刪除 0 張測試照片」。 */
+  /** 沒有待刪除項目時就不要顯示「刪除 0 張照片」。 */
   const showDeleteZone = session.discardedCount > 0;
 
   // 開發期自檢：待刪除總數必須永遠等於三種狀態之和。
@@ -165,11 +165,11 @@ export default function ReviewScreen() {
     // 只把「可檢視」的 id 送進刪除服務。
     const ids = resolution.resolved.map((photo) => photo.id);
     Alert.alert(
-      '確認刪除測試照片',
-      `將刪除 ${ids.length} 張照片。\n\n請只使用可刪除的測試照片。接下來 iPhone 會再次要求確認。`,
+      '確認刪除照片？',
+      `將把 ${ids.length} 張照片移至 iPhone「最近刪除」。照片通常可在 30 天內從「照片」App 復原，接下來 iPhone 仍會再次要求確認。`,
       [
         { text: '取消', style: 'cancel' },
-        { text: '繼續刪除', style: 'destructive', onPress: () => void runDelete(ids) },
+        { text: '繼續', style: 'destructive', onPress: () => void runDelete(ids) },
       ]
     );
   };
@@ -313,9 +313,12 @@ export default function ReviewScreen() {
       <View style={styles.footer}>
         {showDeleteZone ? (
           <View style={styles.dangerZone}>
-            <Text style={[styles.dangerTitle, { fontSize: scaleFont(12, width) }]}>
-              {`Phase 4A 安全測試：一次最多刪除 ${MAX_TEST_DELETE_COUNT} 張，且需經 iPhone 系統確認`}
+            <Text style={[styles.dangerTitle, { fontSize: scaleFont(13, width) }]}>
+              安全刪除模式
             </Text>
+            <Caption>
+              {`每次最多確認刪除 ${MAX_TEST_DELETE_COUNT} 張照片，刪除前仍會由 iPhone 再次確認`}
+            </Caption>
 
             {deleting ? (
               <View style={styles.statusRow}>
@@ -326,7 +329,7 @@ export default function ReviewScreen() {
               <Caption>{deleteMessage}</Caption>
             ) : overTestLimit ? (
               <Text style={[styles.dangerHint, { fontSize: scaleFont(12, width) }]}>
-                {`安全測試階段一次最多刪除 ${MAX_TEST_DELETE_COUNT} 張`}
+                {`每次最多刪除 ${MAX_TEST_DELETE_COUNT} 張，請先把待刪除減到 ${MAX_TEST_DELETE_COUNT} 張以內`}
               </Text>
             ) : !readyForDeletion ? (
               <Caption>需先完成解析並處理無法取得的項目，才能刪除。</Caption>
@@ -337,7 +340,7 @@ export default function ReviewScreen() {
                 deleting
                   ? '正在刪除…'
                   : resolvedCount > 0
-                    ? `刪除 ${resolvedCount} 張測試照片`
+                    ? `刪除 ${resolvedCount} 張照片`
                     : '尚無可刪除的照片'
               }
               variant="danger"
