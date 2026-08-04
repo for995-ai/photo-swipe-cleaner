@@ -28,7 +28,8 @@ import {
 import { useCleanup } from '@/hooks/use-cleanup';
 import { useOnboarding } from '@/hooks/use-onboarding';
 import { PREFETCH_THRESHOLD } from '@/hooks/use-photo-library';
-import { formatPhotoDate } from '@/lib/photos';
+import { describeError, formatPhotoDate, pickMorePhotosAsync } from '@/lib/photos';
+import { scopeLabel } from '@/lib/scope';
 import type { Decision } from '@/lib/session';
 import { colors, radius, scaleFont, spacing } from '@/lib/theme';
 
@@ -37,10 +38,51 @@ export default function PhotosScreen() {
   const { width } = useWindowDimensions();
   // 權限、分頁與進度都來自 root layout 的 CleanupProvider，
   // 所以進出確認頁不會重新讀取相簿，也不會清掉整理進度。
-  const { access, granted, pager, session } = useCleanup();
+  const { access, granted, scopeController, albumAvailability, pager, session } = useCleanup();
   const accessLevel = access.access?.level;
+  const currentScope = scopeController.scope;
+  const currentScopeLabel = scopeLabel(currentScope);
+
+  // 只離開一次，避免 deactivate 與 activated 守門互相觸發重複導覽。
+  const leaving = useRef(false);
+  const albumMissing = albumAvailability.status === 'missing';
+  const needsScopeSelection = scopeController.ready && !scopeController.activated;
+
+  useEffect(() => {
+    if (leaving.current) {
+      return;
+    }
+
+    // 相簿已明確消失或不可存取：停用範圍（不清進度）並帶著提示回範圍頁。
+    if (albumMissing) {
+      leaving.current = true;
+      scopeController.deactivate();
+      scopeController.raiseNotice('原本選擇的相簿已無法存取，請重新選擇整理範圍。');
+      router.replace('/scope');
+      return;
+    }
+
+    // 沒有經過範圍頁就進到這裡（導覽狀態恢復、深層連結）：安全退回，不啟動 pager。
+    if (needsScopeSelection) {
+      leaving.current = true;
+      router.replace('/scope');
+    }
+  }, [albumMissing, needsScopeSelection, scopeController, router]);
 
   const onboarding = useOnboarding();
+  const [pickerError, setPickerError] = useState<string | null>(null);
+
+  /** 沿用既有的 presentPermissionsPickerAsync 流程，不新增任何權限 API。 */
+  const handlePickMore = async () => {
+    setPickerError(null);
+    try {
+      await pickMorePhotosAsync();
+      await access.refresh();
+      albumAvailability.recheck();
+    } catch (cause) {
+      setPickerError(describeError(cause, '無法開啟照片選擇畫面'));
+    }
+  };
 
   const cardRef = useRef<SwipeCardHandle>(null);
   const [busy, setBusy] = useState(false);
@@ -112,7 +154,12 @@ export default function PhotosScreen() {
     <Screen style={styles.screen}>
       <View style={styles.header}>
         <View style={styles.headerRow}>
-          <Text style={[styles.heading, { fontSize: scaleFont(19, width) }]}>照片整理</Text>
+          {/* 標頭直接顯示目前整理範圍。 */}
+          <Text
+            style={[styles.heading, { fontSize: scaleFont(19, width) }]}
+            numberOfLines={1}>
+            {currentScopeLabel}
+          </Text>
           <Caption>{`已處理 ${session.processedCount} / 約 ${totalEstimate} 張`}</Caption>
         </View>
         <ProgressBar value={session.processedCount} total={totalEstimate} />
@@ -145,21 +192,92 @@ export default function PhotosScreen() {
           <Notice tone="warning" title="尚未取得相簿權限">
             請先回到權限頁按下「允許存取」，授權後才能整理照片。
           </Notice>
+        ) : needsScopeSelection || albumMissing ? (
+          // 正在退回範圍頁：給明確訊息，不留白也不無限轉圈。
+          <View style={styles.centered}>
+            <Caption>
+              {albumMissing ? '相簿已無法存取，正在返回範圍選擇…' : '正在返回範圍選擇…'}
+            </Caption>
+            <AppButton
+              label="回到範圍選擇"
+              variant="secondary"
+              onPress={() => router.replace('/scope')}
+            />
+          </View>
+        ) : albumAvailability.status === 'checking' ? (
+          <View style={styles.centered}>
+            <ActivityIndicator />
+            <Caption>正在確認相簿是否仍可存取…</Caption>
+          </View>
+        ) : albumAvailability.status === 'unknown-limited' ? (
+          // 有限存取下清單可能不完整，所以不能說相簿已刪除；
+          // pager 仍保持停用，避免帶著失效的 albumId 去查詢。
+          <View style={styles.centered}>
+            <Notice tone="warning" title="目前無法確認這個相簿">
+              iPhone 目前只允許存取部分照片，因此無法確認原本的相簿是否仍可使用。你可以增加允許的照片，或重新選擇整理範圍。
+            </Notice>
+            {pickerError ? (
+              <Notice tone="danger" title="發生問題">
+                {pickerError}
+              </Notice>
+            ) : null}
+            {Platform.OS !== 'web' ? (
+              <AppButton label="選擇更多照片" onPress={() => void handlePickMore()} />
+            ) : null}
+            <AppButton label="重新檢查" variant="secondary" onPress={albumAvailability.recheck} />
+            <AppButton
+              label="改選其他範圍"
+              variant="ghost"
+              onPress={() => router.replace('/scope')}
+            />
+          </View>
+        ) : albumAvailability.status === 'unknown' ? (
+          // 暫時無法確認 ≠ 相簿已刪除，保留重試而不是直接判定失效。
+          <View style={styles.centered}>
+            <Notice tone="warning" title="暫時無法確認相簿狀態">
+              可能是暫時的讀取問題，照片與整理紀錄都沒有變動。可以重試一次。
+            </Notice>
+            <AppButton label="重試" variant="secondary" onPress={albumAvailability.recheck} />
+            <AppButton
+              label="改選其他範圍"
+              variant="ghost"
+              onPress={() => router.replace('/scope')}
+            />
+          </View>
         ) : pager.loadingFirstPage || restoring ? (
           <View style={styles.centered}>
             <ActivityIndicator />
             <Caption>{restoring ? '正在還原上次的整理進度…' : '正在讀取照片…'}</Caption>
           </View>
         ) : pager.error ? (
-          <Notice tone="danger" title="讀取相簿失敗">
-            {pager.error}
-          </Notice>
+          // 相簿被刪除或失去權限時走這裡：顯示訊息並讓使用者回範圍選擇頁，不閃退。
+          <View style={styles.centered}>
+            <Notice tone="danger" title={`無法讀取「${currentScopeLabel}」`}>
+              {currentScope.type === 'album'
+                ? '這個相簿可能已被刪除，或你已不再擁有它的存取權限。請重新選擇整理範圍。'
+                : pager.error}
+            </Notice>
+            <AppButton
+              label="重新選擇整理範圍"
+              variant="secondary"
+              onPress={() => router.replace('/scope')}
+            />
+          </View>
         ) : loaded === 0 ? (
-          <Notice title="沒有可整理的照片">
-            {accessLevel === 'limited'
-              ? '你目前只授權了有限存取，且尚未選取任何照片。請回到權限頁按「選擇更多照片」。'
-              : '相簿中找不到照片（影片不會被列入）。拍幾張照片後再回來試試。'}
-          </Notice>
+          <View style={styles.centered}>
+            <Notice title={`「${currentScopeLabel}」沒有可整理的照片`}>
+              {accessLevel === 'limited'
+                ? '你目前只授權了有限存取，這個範圍內沒有已授權的照片。可回權限頁按「選擇更多照片」，或換一個範圍。'
+                : currentScope.type === 'all'
+                  ? '相簿中找不到照片（影片不會被列入）。拍幾張照片後再回來試試。'
+                  : '這個範圍內找不到照片（影片不會被列入）。可以換一個範圍再試。'}
+            </Notice>
+            <AppButton
+              label="換一個整理範圍"
+              variant="secondary"
+              onPress={() => router.replace('/scope')}
+            />
+          </View>
         ) : photo ? (
           <SwipeCard
             ref={cardRef}

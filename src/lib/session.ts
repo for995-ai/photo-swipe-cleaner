@@ -13,15 +13,26 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const STORAGE_KEY = 'photo-swipe-cleaner/session/v1';
-const STORAGE_VERSION = 4;
+import { parseScope, type CleanupScope } from '@/lib/scope';
+
+/** v4 以前只有單一 key，那些資料一律屬於「所有照片」範圍。 */
+const LEGACY_STORAGE_KEY = 'photo-swipe-cleaner/session/v1';
+/** v5 起每個整理範圍各有自己的 key，進度完全隔離。 */
+const STORAGE_KEY_PREFIX = 'photo-swipe-cleaner/session/v5/';
+
+const STORAGE_VERSION = 5;
 /**
  * 舊版一律讀得進來，升版不清資料：
  * - v1：history 帶有已不使用的 index 欄位
  * - v2：沒有 deletedIds
  * - v3：沒有 sessionTotalEstimate
+ * - v4：沒有 scope，且共用單一 storage key
  */
-const SUPPORTED_VERSIONS = [1, 2, 3, STORAGE_VERSION];
+const SUPPORTED_VERSIONS = [1, 2, 3, 4, STORAGE_VERSION];
+
+function storageKeyFor(scopeKeyValue: string): string {
+  return `${STORAGE_KEY_PREFIX}${scopeKeyValue}`;
+}
 
 export type Decision = 'keep' | 'discard';
 
@@ -196,6 +207,8 @@ export function findCursorIndex(photoIds: string[], state: SessionState): number
 
 type StoredSession = {
   version: number;
+  /** 這份進度屬於哪個整理範圍；v4 以前沒有這個欄位。 */
+  scope: CleanupScope | null;
   keptIds: string[];
   discardedIds: string[];
   deletedIds: string[];
@@ -245,6 +258,8 @@ function parseStored(raw: string): StoredSession | null {
 
   return {
     version: STORAGE_VERSION,
+    // v4 以前沒有 scope，補 null；格式不對也視為 null，不影響其他欄位。
+    scope: parseScope(candidate.scope),
     keptIds: candidate.keptIds,
     discardedIds: candidate.discardedIds,
     // v1／v2 沒有 deletedIds，補成空陣列即可，其餘欄位一律保留。
@@ -282,19 +297,39 @@ export function restoreSession(stored: StoredSession | null): SessionState {
   };
 }
 
-export async function loadStoredSessionAsync(): Promise<SessionState> {
+/**
+ * 讀取某個整理範圍的進度。
+ *
+ * 「所有照片」範圍在新 key 沒有資料時，會回頭讀 v4 以前的單一 key，
+ * 把既有進度接過來，升版不會讓使用者的進度消失。
+ */
+export async function loadStoredSessionAsync(scopeKeyValue: string): Promise<SessionState> {
   try {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    return restoreSession(raw ? parseStored(raw) : null);
+    const raw = await AsyncStorage.getItem(storageKeyFor(scopeKeyValue));
+    if (raw) {
+      return restoreSession(parseStored(raw));
+    }
+    if (scopeKeyValue === 'all') {
+      const legacy = await AsyncStorage.getItem(LEGACY_STORAGE_KEY);
+      if (legacy) {
+        return restoreSession(parseStored(legacy));
+      }
+    }
+    return EMPTY_SESSION;
   } catch {
     // 讀不到就從頭開始，不要因為快取問題卡住使用者。
     return EMPTY_SESSION;
   }
 }
 
-export async function saveSessionAsync(state: SessionState): Promise<void> {
+export async function saveSessionAsync(
+  state: SessionState,
+  scopeKeyValue: string,
+  scope: CleanupScope
+): Promise<void> {
   const payload: StoredSession = {
     version: STORAGE_VERSION,
+    scope,
     keptIds: state.keptIds,
     discardedIds: state.discardedIds,
     deletedIds: state.deletedIds,
@@ -303,15 +338,20 @@ export async function saveSessionAsync(state: SessionState): Promise<void> {
     updatedAt: Date.now(),
   };
   try {
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    await AsyncStorage.setItem(storageKeyFor(scopeKeyValue), JSON.stringify(payload));
   } catch {
     // 保存失敗不影響當次操作。
   }
 }
 
-export async function clearStoredSessionAsync(): Promise<void> {
+/** 只清除指定範圍的進度，其他範圍不受影響。 */
+export async function clearStoredSessionAsync(scopeKeyValue: string): Promise<void> {
   try {
-    await AsyncStorage.removeItem(STORAGE_KEY);
+    await AsyncStorage.removeItem(storageKeyFor(scopeKeyValue));
+    if (scopeKeyValue === 'all') {
+      // 一併清掉舊 key，否則下次載入又會把舊進度接回來。
+      await AsyncStorage.removeItem(LEGACY_STORAGE_KEY);
+    }
   } catch {
     // 忽略：下一次保存會覆寫。
   }
