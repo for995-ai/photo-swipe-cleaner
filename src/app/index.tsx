@@ -2,12 +2,17 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Alert, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
+import { CheckIcon, ShieldIcon, TrashIcon, WarnIcon } from '@/components/icons';
+import { PixelBadge } from '@/components/pixel/pixel-badge';
+import { PixelNotice } from '@/components/pixel/pixel-notice';
+import { PixelSurface } from '@/components/pixel/pixel-surface';
 import { AppButton, Body, Caption, Screen, Title } from '@/components/ui';
 import { useOnboarding } from '@/hooks/use-onboarding';
 import { APP_BUILD_LABEL, APP_NAME, APP_VERSION_LABEL } from '@/lib/app-info';
 import { MAX_DELETE_COUNT_PER_BATCH } from '@/lib/delete-service';
 import { getPhotoAccessAsync } from '@/lib/photos';
-import { colors, radius, scaleFont, spacing } from '@/lib/theme';
+import { colors, iconSize, spacing } from '@/lib/theme';
+import { textScaling, typeAccent, typeStyle } from '@/lib/typography';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -51,46 +56,52 @@ export default function HomeScreen() {
     <Screen scroll style={styles.screen}>
       <View style={styles.header}>
         <View style={styles.brandRow}>
-          <Text style={[styles.appName, { fontSize: scaleFont(15, width) }]}>{APP_NAME}</Text>
-          <View style={styles.betaTag}>
-            <Text style={[styles.betaTagText, { fontSize: scaleFont(11, width) }]}>
-              {APP_VERSION_LABEL}
-            </Text>
-          </View>
+          {/* App 名稱降為次級標示，主標題才是視覺重心。 */}
+          <Text
+            style={[typeStyle(typeAccent.badgeLabel, width), styles.appName]}
+            maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+            {APP_NAME}
+          </Text>
+          <PixelBadge label={APP_VERSION_LABEL} tone="warning" />
         </View>
         {/* 明確在逗號後斷行，避免最後一個「憶」被擠成單獨一行。 */}
         <Title>{'用滑動，\n整理你的每一段回憶'}</Title>
         <Body muted>往左加入待刪除，往右保留；真正刪除前仍可再次確認</Body>
       </View>
 
-      <View style={styles.hints}>
+      <PixelSurface style={styles.hints}>
         <View style={styles.hintRow}>
-          <View style={[styles.hintDot, { backgroundColor: colors.discard }]} />
+          <TrashIcon size={iconSize.md} fill={colors.discard} />
           <Body muted>往左：加入待刪除清單</Body>
         </View>
         <View style={styles.hintRow}>
-          <View style={[styles.hintDot, { backgroundColor: colors.keep }]} />
+          <CheckIcon size={iconSize.md} fill={colors.keep} />
           <Body muted>往右：保留這張照片</Body>
         </View>
-      </View>
+      </PixelSurface>
 
-      <View style={styles.betaNotice}>
-        <Text style={[styles.betaTitle, { fontSize: scaleFont(13, width) }]}>
-          {APP_BUILD_LABEL}
-        </Text>
-        <Caption>請先使用不重要的照片測試</Caption>
-        <Caption>{`每次最多刪除 ${MAX_DELETE_COUNT_PER_BATCH} 張`}</Caption>
-      </View>
+      <PixelNotice
+        tone="warning"
+        title={APP_BUILD_LABEL}
+        icon={<WarnIcon size={iconSize.sm} fill={colors.warning} />}>
+        {`請先使用不重要的照片測試。每次最多刪除 ${MAX_DELETE_COUNT_PER_BATCH} 張。`}
+      </PixelNotice>
 
       <View style={styles.footer}>
-        <View style={styles.privacy}>
-          <Caption>照片只在你的裝置上處理，不會上傳</Caption>
-        </View>
+        <PixelSurface background={colors.surfaceAlt} style={styles.privacy}>
+          <ShieldIcon size={iconSize.md} fill={colors.keep} />
+          <View style={styles.privacyText}>
+            <Caption>照片只在你的裝置上處理，不會上傳</Caption>
+          </View>
+        </PixelSurface>
+
+        {/* 唯一的主要 CTA。 */}
         <AppButton
           label={checking ? '正在確認權限…' : '開始整理'}
           disabled={checking}
           onPress={() => void handleStart()}
         />
+
         <View style={styles.linkRow}>
           <View style={styles.linkSlot}>
             <AppButton label="關於與隱私" variant="ghost" onPress={() => router.push('/about')} />
@@ -105,11 +116,7 @@ export default function HomeScreen() {
           整個三元運算式會被摺疊成 null，正式版不會有這顆按鈕。
         */}
         {__DEV__ ? (
-          <AppButton
-            label="重新顯示使用教學"
-            variant="ghost"
-            onPress={confirmResetOnboarding}
-          />
+          <AppButton label="重新顯示使用教學" variant="ghost" onPress={confirmResetOnboarding} />
         ) : null}
       </View>
     </Screen>
@@ -118,12 +125,12 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   screen: {
-    gap: spacing.lg,
+    gap: spacing.md,
     justifyContent: 'space-between',
   },
   header: {
     gap: spacing.sm,
-    paddingTop: spacing.lg,
+    paddingTop: spacing.md,
   },
   brandRow: {
     alignItems: 'center',
@@ -132,33 +139,29 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   appName: {
-    color: colors.accent,
-    fontWeight: '700',
+    color: colors.textSecondary,
     letterSpacing: 1,
   },
-  betaTag: {
-    backgroundColor: colors.surfaceAlt,
-    borderColor: colors.warning,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-  },
-  betaTagText: {
-    color: colors.warning,
-    fontWeight: '700',
-  },
-  betaNotice: {
-    backgroundColor: colors.surface,
-    borderColor: colors.warning,
-    borderLeftWidth: 3,
-    borderRadius: radius.sm,
-    gap: spacing.xs,
+  hints: {
+    gap: spacing.ms,
     padding: spacing.md,
   },
-  betaTitle: {
-    color: colors.warning,
-    fontWeight: '700',
+  hintRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.ms,
+  },
+  footer: {
+    gap: spacing.ms,
+  },
+  privacy: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.ms,
+    padding: spacing.ms,
+  },
+  privacyText: {
+    flex: 1,
   },
   linkRow: {
     flexDirection: 'row',
@@ -166,29 +169,5 @@ const styles = StyleSheet.create({
   },
   linkSlot: {
     flex: 1,
-  },
-  hints: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    gap: spacing.sm,
-    padding: spacing.md,
-  },
-  hintRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  hintDot: {
-    borderRadius: 5,
-    height: 10,
-    width: 10,
-  },
-  footer: {
-    gap: spacing.md,
-  },
-  privacy: {
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: radius.sm,
-    padding: spacing.md,
   },
 });

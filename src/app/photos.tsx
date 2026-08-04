@@ -2,7 +2,6 @@ import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Platform,
   Pressable,
@@ -12,15 +11,17 @@ import {
   useWindowDimensions,
 } from 'react-native';
 
-import { CheckIcon, TrashIcon, UndoIcon } from '@/components/icons';
+import { CheckIcon, TrashIcon, UndoIcon, WarnIcon } from '@/components/icons';
 import { OnboardingModal } from '@/components/onboarding-modal';
+import { PixelNotice } from '@/components/pixel/pixel-notice';
+import { PixelSpinner } from '@/components/pixel/pixel-spinner';
+import { PixelSurface } from '@/components/pixel/pixel-surface';
 import { SwipeCard, type SwipeCardHandle } from '@/components/swipe-card';
 import {
   ActionButton,
   AppButton,
   Body,
   Caption,
-  Notice,
   ProgressBar,
   Screen,
   StatChip,
@@ -31,7 +32,8 @@ import { PREFETCH_THRESHOLD } from '@/hooks/use-photo-library';
 import { describeError, formatPhotoDate, pickMorePhotosAsync } from '@/lib/photos';
 import { scopeLabel } from '@/lib/scope';
 import type { Decision } from '@/lib/session';
-import { colors, radius, scaleFont, spacing } from '@/lib/theme';
+import { colors, iconSize, spacing } from '@/lib/theme';
+import { textScaling, typeAccent, typeStyle } from '@/lib/typography';
 
 export default function PhotosScreen() {
   const router = useRouter();
@@ -154,10 +156,12 @@ export default function PhotosScreen() {
     <Screen style={styles.screen}>
       <View style={styles.header}>
         <View style={styles.headerRow}>
-          {/* 標頭直接顯示目前整理範圍。 */}
+          {/* 標頭直接顯示目前整理範圍。長相簿名稱以尾端省略號截斷，前綴仍可辨識。 */}
           <Text
-            style={[styles.heading, { fontSize: scaleFont(19, width) }]}
-            numberOfLines={1}>
+            style={[typeStyle(typeAccent.sectionTitle, width), styles.heading]}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
             {currentScopeLabel}
           </Text>
           <Caption>{`已處理 ${session.processedCount} / 約 ${totalEstimate} 張`}</Caption>
@@ -171,17 +175,34 @@ export default function PhotosScreen() {
           <View style={styles.loadSlot}>
             {pager.isLoadingMore ? (
               <>
-                <ActivityIndicator size="small" />
-                <Caption>載入更多…</Caption>
+                <PixelSpinner size={iconSize.sm} />
+                <Text
+                  style={[typeStyle(typeAccent.micro, width), styles.loadHint]}
+                  maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+                  載入更多…
+                </Text>
               </>
             ) : pager.loadMoreError ? (
-              <Pressable accessibilityRole="button" onPress={pager.retryLoadMore}>
-                <Text style={[styles.retry, { fontSize: scaleFont(12, width) }]}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="載入更多照片失敗，點兩下重試"
+                // 標頭高度直接吃掉照片區，所以用 hitSlop 把觸控範圍補到 44pt
+                // 以上，而不是把這一行撐高。
+                hitSlop={{ top: 16, bottom: 16, left: 12, right: 12 }}
+                onPress={pager.retryLoadMore}>
+                <Text
+                  style={[typeStyle(typeAccent.micro, width), styles.retry]}
+                  maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
                   載入失敗，重試
                 </Text>
               </Pressable>
             ) : (
-              <Caption>{`已載入 ${loaded} 張`}</Caption>
+              // 次要資訊：字級降一級，讓兩個統計標籤成為這一行的重點。
+              <Text
+                style={[typeStyle(typeAccent.micro, width), styles.loadHint]}
+                maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+                {`已載入 ${loaded} 張`}
+              </Text>
             )}
           </View>
         </View>
@@ -189,9 +210,12 @@ export default function PhotosScreen() {
 
       <View style={styles.stage}>
         {!granted ? (
-          <Notice tone="warning" title="尚未取得相簿權限">
+          <PixelNotice
+            tone="warning"
+            title="尚未取得相簿權限"
+            icon={<WarnIcon size={iconSize.sm} fill={colors.warning} />}>
             請先回到權限頁按下「允許存取」，授權後才能整理照片。
-          </Notice>
+          </PixelNotice>
         ) : needsScopeSelection || albumMissing ? (
           // 正在退回範圍頁：給明確訊息，不留白也不無限轉圈。
           <View style={styles.centered}>
@@ -206,20 +230,26 @@ export default function PhotosScreen() {
           </View>
         ) : albumAvailability.status === 'checking' ? (
           <View style={styles.centered}>
-            <ActivityIndicator />
+            <PixelSpinner size={iconSize.md} />
             <Caption>正在確認相簿是否仍可存取…</Caption>
           </View>
         ) : albumAvailability.status === 'unknown-limited' ? (
           // 有限存取下清單可能不完整，所以不能說相簿已刪除；
           // pager 仍保持停用，避免帶著失效的 albumId 去查詢。
           <View style={styles.centered}>
-            <Notice tone="warning" title="目前無法確認這個相簿">
+            <PixelNotice
+              tone="warning"
+              title="目前無法確認這個相簿"
+              icon={<WarnIcon size={iconSize.sm} fill={colors.warning} />}>
               iPhone 目前只允許存取部分照片，因此無法確認原本的相簿是否仍可使用。你可以增加允許的照片，或重新選擇整理範圍。
-            </Notice>
+            </PixelNotice>
             {pickerError ? (
-              <Notice tone="danger" title="發生問題">
+              <PixelNotice
+                tone="danger"
+                title="發生問題"
+                icon={<WarnIcon size={iconSize.sm} fill={colors.discard} />}>
                 {pickerError}
-              </Notice>
+              </PixelNotice>
             ) : null}
             {Platform.OS !== 'web' ? (
               <AppButton label="選擇更多照片" onPress={() => void handlePickMore()} />
@@ -234,9 +264,12 @@ export default function PhotosScreen() {
         ) : albumAvailability.status === 'unknown' ? (
           // 暫時無法確認 ≠ 相簿已刪除，保留重試而不是直接判定失效。
           <View style={styles.centered}>
-            <Notice tone="warning" title="暫時無法確認相簿狀態">
+            <PixelNotice
+              tone="warning"
+              title="暫時無法確認相簿狀態"
+              icon={<WarnIcon size={iconSize.sm} fill={colors.warning} />}>
               可能是暫時的讀取問題，照片與整理紀錄都沒有變動。可以重試一次。
-            </Notice>
+            </PixelNotice>
             <AppButton label="重試" variant="secondary" onPress={albumAvailability.recheck} />
             <AppButton
               label="改選其他範圍"
@@ -246,17 +279,17 @@ export default function PhotosScreen() {
           </View>
         ) : pager.loadingFirstPage || restoring ? (
           <View style={styles.centered}>
-            <ActivityIndicator />
+            <PixelSpinner size={iconSize.md} />
             <Caption>{restoring ? '正在還原上次的整理進度…' : '正在讀取照片…'}</Caption>
           </View>
         ) : pager.error ? (
           // 相簿被刪除或失去權限時走這裡：顯示訊息並讓使用者回範圍選擇頁，不閃退。
           <View style={styles.centered}>
-            <Notice tone="danger" title={`無法讀取「${currentScopeLabel}」`}>
+            <PixelNotice tone="danger" title={`無法讀取「${currentScopeLabel}」`}>
               {currentScope.type === 'album'
                 ? '這個相簿可能已被刪除，或你已不再擁有它的存取權限。請重新選擇整理範圍。'
                 : pager.error}
-            </Notice>
+            </PixelNotice>
             <AppButton
               label="重新選擇整理範圍"
               variant="secondary"
@@ -265,13 +298,13 @@ export default function PhotosScreen() {
           </View>
         ) : loaded === 0 ? (
           <View style={styles.centered}>
-            <Notice title={`「${currentScopeLabel}」沒有可整理的照片`}>
+            <PixelNotice title={`「${currentScopeLabel}」沒有可整理的照片`}>
               {accessLevel === 'limited'
                 ? '你目前只授權了有限存取，這個範圍內沒有已授權的照片。可回權限頁按「選擇更多照片」，或換一個範圍。'
                 : currentScope.type === 'all'
                   ? '相簿中找不到照片（影片不會被列入）。拍幾張照片後再回來試試。'
                   : '這個範圍內找不到照片（影片不會被列入）。可以換一個範圍再試。'}
-            </Notice>
+            </PixelNotice>
             <AppButton
               label="換一個整理範圍"
               variant="secondary"
@@ -292,25 +325,34 @@ export default function PhotosScreen() {
             onDecided={(decision) => session.decide(photo.id, decision)}
           />
         ) : pager.loadMoreError ? (
-          <Notice tone="danger" title="載入更多照片失敗">
+          <PixelNotice
+            tone="danger"
+            title="載入更多照片失敗"
+            icon={<WarnIcon size={iconSize.sm} fill={colors.discard} />}>
             {pager.loadMoreError}
-          </Notice>
+          </PixelNotice>
         ) : pager.hasNextPage ? (
           <View style={styles.centered}>
-            <ActivityIndicator />
+            <PixelSpinner size={iconSize.md} />
             <Caption>正在載入更多照片…</Caption>
           </View>
         ) : (
-          <View style={styles.done}>
-            <Text style={[styles.doneTitle, { fontSize: scaleFont(22, width) }]}>整理完成</Text>
+          <PixelSurface style={styles.done}>
+            <CheckIcon size={iconSize.lg} fill={colors.keep} />
+            <Text
+              style={[typeStyle(typeAccent.screenHeading, width), styles.doneTitle]}
+              maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+              整理完成
+            </Text>
             <Body muted>
               已授權的 {loaded} 張都看過了：保留 {session.keptCount} 張、待刪除{' '}
               {session.discardedCount} 張。
             </Body>
             <Caption>
-              待刪除清單只是標記，本階段不會真的刪除照片。批次刪除會在後續階段實作。
+              左滑的照片會先加入待刪除清單。只有在確認頁完成檢查並通過 iPhone
+              系統確認後，照片才會移至「最近刪除」。
             </Caption>
-          </View>
+          </PixelSurface>
         )}
       </View>
 
@@ -323,7 +365,7 @@ export default function PhotosScreen() {
               label="待刪除"
               tone="discard"
               disabled={!photo || busy}
-              icon={<TrashIcon size={20} color={colors.discard} />}
+              icon={<TrashIcon size={iconSize.lg} fill={colors.discard} />}
               onPress={() => requestDecision('discard')}
             />
           </View>
@@ -332,7 +374,7 @@ export default function PhotosScreen() {
               label="復原"
               tone="neutral"
               disabled={!session.canUndo || busy}
-              icon={<UndoIcon size={20} color={colors.textMuted} />}
+              icon={<UndoIcon size={iconSize.lg} fill={colors.primary} />}
               onPress={handleUndo}
             />
           </View>
@@ -341,17 +383,17 @@ export default function PhotosScreen() {
               label="保留"
               tone="keep"
               disabled={!photo || busy}
-              icon={<CheckIcon size={20} color={colors.keep} />}
+              icon={<CheckIcon size={iconSize.lg} fill={colors.keep} />}
               onPress={() => requestDecision('keep')}
             />
           </View>
         </View>
 
-        <View style={styles.safeBanner}>
-          <Text style={[styles.safeBannerText, { fontSize: scaleFont(12, width) }]}>
-            滑動只會標記；需在確認頁並經 iPhone 系統確認後才會刪除
-          </Text>
-        </View>
+        {/* info 而非 success：這是說明，不是「成功」狀態。 */}
+        <PixelNotice tone="info" compact>
+          左滑的照片會先加入待刪除清單。只有在確認頁完成檢查並通過 iPhone
+          系統確認後，照片才會移至「最近刪除」。
+        </PixelNotice>
 
         {/* 隨時可以結束本次整理去檢查待刪除清單，進度不會被清除。 */}
         <AppButton
@@ -388,18 +430,22 @@ export default function PhotosScreen() {
 
 const styles = StyleSheet.create({
   screen: {
-    gap: spacing.md,
+    // 上／中／下三區的間距收到 12，省下的高度全部給照片。
+    gap: spacing.ms,
   },
+  /** 標頭三行是同一組資訊，用最小間距綁在一起。 */
   header: {
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
   headerRow: {
     alignItems: 'center',
     flexDirection: 'row',
+    gap: spacing.sm,
     justifyContent: 'space-between',
   },
   heading: {
-    color: colors.text,
+    color: colors.textPrimary,
+    flexShrink: 1,
     fontWeight: '700',
   },
   stats: {
@@ -411,8 +457,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.xs,
   },
+  loadHint: {
+    color: colors.textSecondary,
+  },
   retry: {
-    color: colors.warning,
+    color: colors.warningText,
     fontWeight: '600',
   },
   // flex:1 讓卡片吃掉剩餘空間，各尺寸 iPhone 的上下區塊都不會被推出畫面。
@@ -424,17 +473,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     justifyContent: 'center',
-    padding: spacing.md,
+    padding: spacing.sm,
   },
   done: {
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
     gap: spacing.sm,
-    padding: spacing.lg,
+    padding: spacing.md,
   },
   doneTitle: {
-    color: colors.keep,
+    color: colors.keepText,
     fontWeight: '700',
   },
   footer: {
@@ -446,20 +493,6 @@ const styles = StyleSheet.create({
   },
   actionSlot: {
     flex: 1,
-  },
-  safeBanner: {
-    alignItems: 'center',
-    backgroundColor: colors.surfaceAlt,
-    borderColor: colors.keep,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-  },
-  safeBannerText: {
-    color: colors.keep,
-    fontWeight: '600',
-    textAlign: 'center',
   },
   ghostRow: {
     flexDirection: 'row',

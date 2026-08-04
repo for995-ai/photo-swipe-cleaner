@@ -15,7 +15,8 @@ import {
 import { CheckIcon, TrashIcon } from '@/components/icons';
 import type { RecentPhoto } from '@/lib/photos';
 import type { Decision } from '@/lib/session';
-import { colors, radius, scaleFont, spacing } from '@/lib/theme';
+import { border, colors, iconSize, radius, scaleFont, shadow, spacing } from '@/lib/theme';
+import { textScaling, typeAccent, typeScale, typeStyle } from '@/lib/typography';
 
 /** 需要滑動超過螢幕寬度的比例才算確認，未達門檻就回彈。 */
 const CONFIRM_RATIO = 0.25;
@@ -161,67 +162,110 @@ export const SwipeCard = forwardRef<SwipeCardHandle, Props>(function SwipeCard(
     extrapolate: 'clamp',
   });
 
+  // 疊在照片上的方向徽章：字級跟著裝置寬度縮放，並補上 lineHeight，
+  // 放大字級時中文字不會被徽章上下邊裁到。
   const badgeFont = scaleFont(15, width);
+  const badgeLine = Math.round(badgeFont * 1.3);
 
   return (
+    // 手勢層：flex:1 佔滿 stage、沒有 margin、沒有 overflow: hidden，
+    // 所以觸控範圍與改版前完全相同，硬陰影也不會被裁掉。
     <Animated.View
       style={[styles.card, { opacity, transform: [{ translateX }, { rotate }] }]}
       {...panResponder.panHandlers}>
-      {failed ? (
-        <View style={styles.fallback}>
-          <Text style={[styles.fallbackTitle, { fontSize: scaleFont(16, width) }]}>
-            這張照片無法載入
-          </Text>
-          <Text style={[styles.fallbackBody, { fontSize: scaleFont(13, width) }]}>
-            可能仍存放在 iCloud 或已被移除，仍然可以左右滑動做決定。
-          </Text>
-        </View>
-      ) : (
-        <Image
-          source={{ uri: photo.uri }}
-          style={styles.photo}
-          // aspectFit：完整顯示整張照片，不為了填滿而裁切。
-          contentFit="contain"
-          allowDownscaling
-          recyclingKey={photo.id}
-          cachePolicy="memory-disk"
-          onError={onLoadError}
+      {/* 硬陰影畫在裁切層外面：位移 4px 的實色方塊，無模糊。 */}
+      <View pointerEvents="none" style={styles.cardShadow} />
+
+      {/* 只有這一層裁切照片。 */}
+      <View style={styles.cardInner}>
+        {failed ? (
+          <View style={styles.fallback}>
+            <Text
+              style={[typeStyle(typeAccent.button, width), styles.fallbackTitle]}
+              maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+              這張照片無法載入
+            </Text>
+            <Text
+              style={[typeStyle(typeScale.caption, width), styles.fallbackBody]}
+              maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+              可能仍存放在 iCloud 或已被移除，仍然可以左右滑動做決定。
+            </Text>
+          </View>
+        ) : (
+          <Image
+            source={{ uri: photo.uri }}
+            style={styles.photo}
+            // aspectFit：完整顯示整張照片，不為了填滿而裁切。
+            contentFit="contain"
+            allowDownscaling
+            recyclingKey={photo.id}
+            cachePolicy="memory-disk"
+            onError={onLoadError}
+          />
+        )}
+
+        {/* 方向側加粗到 4px：右滑強調右邊、左滑強調左邊。疊在上層，不影響卡片尺寸。 */}
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.tint, styles.tintKeep, { opacity: keepOpacity }]}
         />
-      )}
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.tint, styles.tintDiscard, { opacity: discardOpacity }]}
+        />
 
-      <Animated.View
-        pointerEvents="none"
-        style={[styles.tint, { borderColor: colors.keep, opacity: keepOpacity }]}
-      />
-      <Animated.View
-        pointerEvents="none"
-        style={[styles.tint, { borderColor: colors.discard, opacity: discardOpacity }]}
-      />
+        <Animated.View pointerEvents="none" style={[styles.badgeSlot, { opacity: keepOpacity }]}>
+          <View style={styles.badge}>
+            {/* 兩層 overlayScrim 疊出足夠不透明度，淺色文字在任何照片上都讀得到。 */}
+            <View pointerEvents="none" style={styles.badgeScrim} />
+            <CheckIcon size={iconSize.lg} fill={colors.keep} />
+            <Text
+              style={[styles.badgeText, { fontSize: badgeFont, lineHeight: badgeLine }]}
+              maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+              保留
+            </Text>
+          </View>
+        </Animated.View>
 
-      <Animated.View pointerEvents="none" style={[styles.badgeSlot, { opacity: keepOpacity }]}>
-        <View style={[styles.badge, { borderColor: colors.keep }]}>
-          <CheckIcon size={badgeFont * 1.5} color={colors.keep} />
-          <Text style={[styles.badgeText, { color: colors.keep, fontSize: badgeFont }]}>保留</Text>
-        </View>
-      </Animated.View>
-
-      <Animated.View pointerEvents="none" style={[styles.badgeSlot, { opacity: discardOpacity }]}>
-        <View style={[styles.badge, { borderColor: colors.discard }]}>
-          <TrashIcon size={badgeFont * 1.5} color={colors.discard} />
-          <Text style={[styles.badgeText, { color: colors.discard, fontSize: badgeFont }]}>
-            待刪除
-          </Text>
-        </View>
-      </Animated.View>
+        <Animated.View pointerEvents="none" style={[styles.badgeSlot, { opacity: discardOpacity }]}>
+          <View style={styles.badge}>
+            <View pointerEvents="none" style={styles.badgeScrim} />
+            <TrashIcon size={iconSize.lg} fill={colors.discard} />
+            <Text
+              style={[styles.badgeText, { fontSize: badgeFont, lineHeight: badgeLine }]}
+              maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+              待刪除
+            </Text>
+          </View>
+        </Animated.View>
+      </View>
     </Animated.View>
   );
 });
 
 const styles = StyleSheet.create({
+  /** 手勢層：不裁切、不加 margin，維持原本的觸控範圍。 */
   card: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
     flex: 1,
+  },
+  cardShadow: {
+    backgroundColor: colors.shadow,
+    borderRadius: radius.md,
+    bottom: 0,
+    left: shadow.offset,
+    position: 'absolute',
+    right: 0,
+    top: shadow.offset,
+  },
+  /** 唯一裁切照片的一層，向右下讓出 4px 讓陰影露出來。 */
+  cardInner: {
+    backgroundColor: colors.surface,
+    borderColor: colors.outline,
+    borderRadius: radius.md,
+    borderWidth: border.width,
+    flex: 1,
+    marginBottom: shadow.offset,
+    marginRight: shadow.offset,
     overflow: 'hidden',
   },
   photo: {
@@ -231,7 +275,15 @@ const styles = StyleSheet.create({
   tint: {
     ...StyleSheet.absoluteFillObject,
     borderRadius: radius.md,
-    borderWidth: 2,
+    borderWidth: border.width,
+  },
+  tintKeep: {
+    borderColor: colors.keep,
+    borderRightWidth: border.width * 2,
+  },
+  tintDiscard: {
+    borderColor: colors.discard,
+    borderLeftWidth: border.width * 2,
   },
   badgeSlot: {
     ...StyleSheet.absoluteFillObject,
@@ -240,14 +292,21 @@ const styles = StyleSheet.create({
   },
   badge: {
     alignItems: 'center',
-    backgroundColor: 'rgba(14, 16, 20, 0.82)',
+    backgroundColor: colors.overlayScrim,
+    borderColor: colors.surface,
     borderRadius: radius.md,
-    borderWidth: 2,
-    gap: spacing.xs,
+    borderWidth: border.width,
+    gap: spacing.sm,
+    overflow: 'hidden',
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
+  badgeScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: colors.overlayScrim,
+  },
   badgeText: {
+    color: colors.surface,
     fontWeight: '700',
     letterSpacing: 2,
   },
@@ -259,12 +318,11 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   fallbackTitle: {
-    color: colors.text,
+    color: colors.textPrimary,
     fontWeight: '600',
   },
   fallbackBody: {
-    color: colors.textMuted,
-    lineHeight: 20,
+    color: colors.textSecondary,
     textAlign: 'center',
   },
 });

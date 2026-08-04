@@ -1,8 +1,11 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 
-import { AppButton, Body, Caption, Notice, Screen, Title } from '@/components/ui';
+import { CheckIcon, ShieldIcon, WarnIcon } from '@/components/icons';
+import { PixelNotice } from '@/components/pixel/pixel-notice';
+import { PixelSpinner } from '@/components/pixel/pixel-spinner';
+import { AppButton, Body, Caption, Screen, Title } from '@/components/ui';
 import { useCleanup } from '@/hooks/use-cleanup';
 import {
   PHOTO_PAGE_SIZE,
@@ -10,7 +13,7 @@ import {
   openSystemSettingsAsync,
   pickMorePhotosAsync,
 } from '@/lib/photos';
-import { spacing } from '@/lib/theme';
+import { colors, iconSize, spacing } from '@/lib/theme';
 
 export default function PermissionScreen() {
   const router = useRouter();
@@ -45,39 +48,64 @@ export default function PermissionScreen() {
       <View style={styles.states}>
         {access === null ? (
           <View style={styles.loading}>
-            <ActivityIndicator />
+            <PixelSpinner size={iconSize.md} />
             <Caption>正在確認權限狀態…</Caption>
           </View>
         ) : null}
 
         {access?.level === 'undetermined' ? (
-          <Notice title="尚未詢問">
+          <PixelNotice
+            title="尚未詢問"
+            icon={<ShieldIcon size={iconSize.sm} fill={colors.primary} />}>
             按下下方按鈕後，才會出現系統的相簿權限對話框。App 啟動時不會主動詢問。
-          </Notice>
+          </PixelNotice>
         ) : null}
 
         {access?.level === 'full' ? (
-          <Notice tone="success" title="完整存取">
+          <PixelNotice
+            tone="success"
+            title="完整存取"
+            icon={<CheckIcon size={iconSize.sm} fill={colors.keep} />}>
             已可讀取整個相簿，會依時間由新到舊每次載入 {PHOTO_PAGE_SIZE} 張，一邊整理一邊往下讀。
-          </Notice>
+          </PixelNotice>
         ) : null}
 
         {access?.level === 'limited' ? (
-          <Notice tone="warning" title="有限存取">
+          <PixelNotice
+            tone="warning"
+            title="有限存取"
+            icon={<WarnIcon size={iconSize.sm} fill={colors.warning} />}>
             目前只能整理你所選取的照片，看到的張數會少於整個相簿。可以按「選擇更多照片」追加，或在「設定」改為允許全部照片。
-          </Notice>
+          </PixelNotice>
         ) : null}
 
         {access?.level === 'denied' ? (
-          <Notice tone="danger" title={access.canAskAgain ? '已拒絕' : '已拒絕或受限制'}>
+          <PixelNotice
+            tone="danger"
+            title={access.canAskAgain ? '已拒絕' : '已拒絕或受限制'}
+            icon={<ShieldIcon size={iconSize.sm} fill={colors.discard} />}>
             {access.canAskAgain
               ? '尚未取得相簿權限，可以再試一次。'
               : '系統不會再次詢問，請前往 iPhone 的「設定 → 隱私權與安全性 → 照片」開啟權限。若是家長控管造成的限制，需要由管理者解除。'}
-          </Notice>
+          </PixelNotice>
         ) : null}
 
-        {error ? <Notice tone="danger" title="發生問題">{error}</Notice> : null}
-        {actionError ? <Notice tone="danger" title="發生問題">{actionError}</Notice> : null}
+        {error ? (
+          <PixelNotice
+            tone="danger"
+            title="發生問題"
+            icon={<WarnIcon size={iconSize.sm} fill={colors.discard} />}>
+            {error}
+          </PixelNotice>
+        ) : null}
+        {actionError ? (
+          <PixelNotice
+            tone="danger"
+            title="發生問題"
+            icon={<WarnIcon size={iconSize.sm} fill={colors.discard} />}>
+            {actionError}
+          </PixelNotice>
+        ) : null}
       </View>
 
       <View style={styles.actions}>
@@ -87,13 +115,19 @@ export default function PermissionScreen() {
         ) : (
           <AppButton
             label={requesting ? '正在請求權限…' : '允許存取'}
-            disabled={access === null || requesting || (access.level === 'denied' && !access.canAskAgain)}
+            disabled={
+              access === null || requesting || (access.level === 'denied' && !access.canAskAgain)
+            }
             onPress={() => void request()}
           />
         )}
 
         {access?.level === 'limited' && Platform.OS !== 'web' ? (
-          <AppButton label="選擇更多照片" variant="secondary" onPress={() => void handlePickMore()} />
+          <AppButton
+            label="選擇更多照片"
+            variant="secondary"
+            onPress={() => void handlePickMore()}
+          />
         ) : null}
 
         {access?.level === 'denied' && !access.canAskAgain ? (
