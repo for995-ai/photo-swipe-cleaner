@@ -1,9 +1,8 @@
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   FlatList,
   Modal,
@@ -16,15 +15,48 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { CheckIcon } from '@/components/icons';
-import { AppButton, Body, Caption, Notice, Screen, StatChip } from '@/components/ui';
+import { CheckIcon, WarnIcon } from '@/components/icons';
+import { PixelBadge } from '@/components/pixel/pixel-badge';
+import { PixelNotice } from '@/components/pixel/pixel-notice';
+import { PixelSpinner } from '@/components/pixel/pixel-spinner';
+import { PixelSurface } from '@/components/pixel/pixel-surface';
+import { AppButton, Body, Caption, Screen } from '@/components/ui';
 import { useCleanup } from '@/hooks/use-cleanup';
 import { useDiscardedResolver } from '@/hooks/use-discarded-resolver';
 import { MAX_DELETE_COUNT_PER_BATCH, deletePhotoAssetsAsync } from '@/lib/delete-service';
-import { formatPhotoDate } from '@/lib/photos';
-import { colors, radius, scaleFont, spacing } from '@/lib/theme';
+import { formatPhotoDate, type RecentPhoto } from '@/lib/photos';
+import { border, colors, iconSize, radius, shadow, spacing } from '@/lib/theme';
+import { textScaling, typeAccent, typeStyle } from '@/lib/typography';
 
 const COLUMNS = 3;
+
+/**
+ * 行內文字按鈕（重新查詢／移出清單）的觸控補償。
+ * 這些按鈕跟 Caption 排在同一行，把它們撐到 44pt 高會壓縮下方的縮圖網格，
+ * 所以改用 hitSlop 把實際可點範圍補到 44×44pt 以上。
+ */
+const RETRY_HIT_SLOP = { top: 14, bottom: 14, left: 12, right: 12 } as const;
+
+/** 成功狀態的靜態像素星星：兩條交叉色塊，沒有動畫。 */
+function PixelStar({ size, color }: { size: number; color: string }) {
+  const arm = Math.max(2, Math.round(size / 5 / 2) * 2);
+  return (
+    <View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={[styles.star, { width: size, height: size }]}>
+      <View style={{ position: 'absolute', width: size, height: arm, backgroundColor: color }} />
+      <View style={{ position: 'absolute', width: arm, height: size, backgroundColor: color }} />
+    </View>
+  );
+}
+
+/** Grid 一格的四種狀態。資料全部來自現有 resolver 與 Session，不重新計算。 */
+type GridItem =
+  | { key: string; kind: 'resolved'; photo: RecentPhoto; resolvedIndex: number }
+  | { key: string; kind: 'pending' }
+  | { key: string; kind: 'unavailable' }
+  | { key: string; kind: 'deleted' };
 
 export default function ReviewScreen() {
   const router = useRouter();
@@ -91,6 +123,8 @@ export default function ReviewScreen() {
     Math.max(insets.left, spacing.lg) + Math.max(insets.right, spacing.lg);
   const gap = spacing.sm;
   const cellSize = Math.floor((width - horizontalPadding - gap * (COLUMNS - 1)) / COLUMNS);
+  /** 2px 描邊算在 cellSize 之內，所以照片本身要再扣掉左右邊框。 */
+  const cellInnerSize = cellSize - border.width * 2;
 
   // 改為保留後清單會變短，把預覽索引夾回範圍，清空就關掉預覽。
   useEffect(() => {
@@ -105,6 +139,35 @@ export default function ReviewScreen() {
   }, [previewIndex, resolvedCount]);
 
   const previewPhoto = previewIndex === null ? undefined : resolution.resolved[previewIndex];
+
+  /**
+   * Grid 資料：可檢視 -> 解析中 -> 無法取得 -> 已刪除。
+   * 只是把既有的三個 resolver 陣列與 Session 的 deletedIds 攤平成一份清單，
+   * 沒有重新判斷任何狀態；已改為保留的照片本來就不在 discardedIds 裡，所以不會出現。
+   */
+  const gridItems = useMemo<GridItem[]>(() => {
+    const items: GridItem[] = resolution.resolved.map((photo, resolvedIndex) => ({
+      key: `resolved:${photo.id}`,
+      kind: 'resolved',
+      photo,
+      resolvedIndex,
+    }));
+    for (const id of resolution.pendingIds) {
+      items.push({ key: `pending:${id}`, kind: 'pending' });
+    }
+    for (const id of resolution.unavailableIds) {
+      items.push({ key: `unavailable:${id}`, kind: 'unavailable' });
+    }
+    for (const id of session.state.deletedIds) {
+      items.push({ key: `deleted:${id}`, kind: 'deleted' });
+    }
+    return items;
+  }, [
+    resolution.resolved,
+    resolution.pendingIds,
+    resolution.unavailableIds,
+    session.state.deletedIds,
+  ]);
 
   const handleKeepInstead = (photoId: string) => {
     if (Platform.OS !== 'web') {
@@ -180,77 +243,239 @@ export default function ReviewScreen() {
     router.dismissAll();
   };
 
+  /** 取消／失敗訊息用 PixelNotice 呈現，語意分開：取消是 warning、失敗是 danger。 */
+  const deleteOutcomeTone: 'warning' | 'danger' | null = deleteMessage
+    ? deleteMessage.startsWith('已刪除')
+      ? null
+      : deleteMessage.startsWith('你已取消')
+        ? 'warning'
+        : 'danger'
+    : null;
+
+  const renderCell = (item: GridItem) => {
+    const boxSize = { width: cellSize, height: cellSize };
+
+    if (item.kind === 'resolved') {
+      return (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`待刪除照片 ${item.resolvedIndex + 1}，可檢視，點兩下放大`}
+          onPress={() => setPreviewIndex(item.resolvedIndex)}>
+          {({ pressed }) => (
+            <PixelSurface
+              cornerRadius={radius.sm}
+              shadowOffset={0}
+              clip
+              style={[boxSize, pressed && styles.cellPressed]}>
+              <Image
+                source={{ uri: item.photo.uri }}
+                style={{ width: cellInnerSize, height: cellInnerSize }}
+                contentFit="cover"
+                allowDownscaling
+                recyclingKey={item.photo.id}
+                cachePolicy="memory-disk"
+                transition={100}
+              />
+            </PixelSurface>
+          )}
+        </Pressable>
+      );
+    }
+
+    if (item.kind === 'pending') {
+      return (
+        <View accessible accessibilityLabel="待刪除照片，解析中">
+          <PixelSurface
+            background={colors.surfaceAlt}
+            cornerRadius={radius.sm}
+            shadowOffset={0}
+            style={[boxSize, styles.cellState]}>
+            <PixelSpinner size={iconSize.sm} />
+            <Text
+              style={[typeStyle(typeAccent.micro, width), styles.cellStateText]}
+              maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+              解析中
+            </Text>
+          </PixelSurface>
+        </View>
+      );
+    }
+
+    if (item.kind === 'unavailable') {
+      return (
+        <View accessible accessibilityLabel="待刪除照片，無法取得">
+          <PixelSurface
+            background={colors.surfaceAlt}
+            outlineColor={colors.discardText}
+            cornerRadius={radius.sm}
+            shadowOffset={0}
+            style={[boxSize, styles.cellState]}>
+            <WarnIcon size={iconSize.md} fill={colors.warning} />
+            <Text
+              style={[typeStyle(typeAccent.micro, width), styles.cellStateText]}
+              maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+              無法取得
+            </Text>
+          </PixelSurface>
+        </View>
+      );
+    }
+
+    return (
+      <View accessible accessibilityLabel="照片，已刪除">
+        <PixelSurface
+          background={colors.surface}
+          outlineColor={colors.keepText}
+          cornerRadius={radius.sm}
+          shadowOffset={0}
+          style={[boxSize, styles.cellState]}>
+          <CheckIcon size={iconSize.md} fill={colors.keep} />
+          <Text
+            style={[typeStyle(typeAccent.micro, width), styles.cellStateText, styles.cellStateDone]}
+            maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+            已刪除
+          </Text>
+        </PixelSurface>
+      </View>
+    );
+  };
+
   return (
     <Screen style={styles.screen}>
       <View style={styles.header}>
-        <Text style={[styles.heading, { fontSize: scaleFont(21, width) }]}>本次整理結果</Text>
-        <Caption>{`本次已處理 ${session.processedCount} 張`}</Caption>
+        <Text
+          style={[typeStyle(typeAccent.screenHeading, width), styles.heading]}
+          maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+          確認待刪除照片
+        </Text>
+        <Caption>
+          {`本次已處理 ${session.processedCount} 張。以下照片還沒有被刪除，按下刪除後 iPhone 會再要求一次確認。`}
+        </Caption>
+
+        {/* 主要整理統計：正常尺寸，是這一區的重點。 */}
         <View style={styles.stats}>
-          <StatChip label="已保留" value={session.keptCount} tone="keep" />
-          <StatChip label="待刪除" value={session.discardedCount} tone="discard" />
-          <StatChip label="已刪除" value={session.deletedCount} tone="neutral" />
+          <PixelBadge label="已保留" value={session.keptCount} tone="keep" />
+          <PixelBadge label="待刪除" value={session.discardedCount} tone="discard" />
+          <PixelBadge label="已刪除" value={session.deletedCount} tone="neutral" />
         </View>
+
         {session.discardedCount > 0 ? (
-          <View style={styles.stats}>
-            <StatChip label="可檢視" value={resolvedCount} tone="info" />
-            <StatChip label="解析中" value={pendingCount} tone="warning" />
-            <StatChip label="無法取得" value={unavailableCount} tone="neutral" />
-          </View>
+          // 照片解析狀態：包在較淡的容器裡並加點陣分隔線，視覺層級明顯低一階。
+          <PixelSurface background={colors.surfaceAlt} shadowOffset={0} style={styles.resolveGroup}>
+            <View style={styles.dotDivider}>
+              {Array.from({ length: 24 }, (_, index) => (
+                <View key={index} style={styles.dot} />
+              ))}
+            </View>
+            <Text
+              style={[typeStyle(typeAccent.micro, width), styles.groupLabel]}
+              maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+              照片解析狀態
+            </Text>
+            <View style={styles.stats}>
+              <PixelBadge label="可檢視" value={resolvedCount} tone="info" />
+              <PixelBadge label="解析中" value={pendingCount} tone="warning" />
+              <PixelBadge label="無法取得" value={unavailableCount} tone="neutral" />
+            </View>
+          </PixelSurface>
         ) : null}
       </View>
 
       <View style={styles.stage}>
         {!granted ? (
-          <Notice tone="warning" title="尚未取得相簿權限">
+          <PixelNotice
+            tone="warning"
+            title="尚未取得相簿權限"
+            icon={<WarnIcon size={iconSize.sm} fill={colors.warning} />}>
             請先回到權限頁允許存取相簿。
-          </Notice>
+          </PixelNotice>
         ) : showSuccessSummary ? (
           <View style={styles.emptyWrap}>
-            <View style={[styles.empty, styles.successCard]}>
-              <CheckIcon size={34} color={colors.keep} />
-              <Text style={[styles.successTitle, { fontSize: scaleFont(19, width) }]}>
+            <PixelSurface
+              outlineWidth={border.widthThick}
+              outlineColor={colors.keepText}
+              style={styles.successCard}>
+              <View style={styles.starRow}>
+                <PixelStar size={10} color={colors.warning} />
+                <CheckIcon size={iconSize.lg} fill={colors.keep} />
+                <PixelStar size={10} color={colors.warning} />
+              </View>
+              <Text
+                style={[typeStyle(typeAccent.sectionTitle, width), styles.successTitle]}
+                maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
                 {`已成功刪除 ${session.deletedCount} 張照片`}
               </Text>
-              <Body muted>
-                {`本次已處理 ${session.processedCount} 張：已保留 ${session.keptCount} 張、待刪除 ${session.discardedCount} 張、已刪除 ${session.deletedCount} 張。`}
-              </Body>
+              <View style={styles.stats}>
+                <PixelBadge label="已保留" value={session.keptCount} tone="keep" />
+                <PixelBadge label="待刪除" value={session.discardedCount} tone="discard" />
+              </View>
+              <View style={styles.stats}>
+                <PixelBadge label="已刪除" value={session.deletedCount} tone="neutral" />
+                <PixelBadge label="無法取得" value={unavailableCount} tone="warning" />
+              </View>
               <Caption>照片已移到 iPhone「照片」App 的「最近刪除」，可在那裡復原。</Caption>
-            </View>
+            </PixelSurface>
           </View>
         ) : session.discardedCount === 0 ? (
           <View style={styles.emptyWrap}>
-            <View style={styles.empty}>
-              <Text style={[styles.emptyTitle, { fontSize: scaleFont(18, width) }]}>
+            <PixelSurface style={styles.empty}>
+              <Text
+                style={[typeStyle(typeAccent.sectionTitle, width), styles.emptyTitle]}
+                maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
                 目前沒有待刪除的照片
               </Text>
               <Body muted>你還沒有把任何照片標記為待刪除，或都已經改回保留了。</Body>
               <Caption>回到整理頁往左滑，就會把照片加入待刪除清單。</Caption>
-            </View>
+            </PixelSurface>
           </View>
         ) : (
           <>
             {pendingCount > 0 ? (
               <View style={styles.statusRow}>
-                {resolution.blocked ? null : <ActivityIndicator size="small" />}
+                {resolution.blocked ? null : <PixelSpinner size={iconSize.sm} />}
                 <Caption>
                   {resolution.blocked
                     ? `相簿權限有變動，已暫停查詢（${resolvedCount} / ${session.discardedCount}）`
                     : `正在準備待刪除照片 ${resolvedCount} / ${session.discardedCount}`}
                 </Caption>
                 {resolution.blocked ? (
-                  <Pressable accessibilityRole="button" onPress={resolution.retryUnavailable}>
-                    <Text style={[styles.retry, { fontSize: scaleFont(12, width) }]}>重新查詢</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="重新查詢無法確認的照片"
+                    hitSlop={RETRY_HIT_SLOP}
+                    onPress={resolution.retryUnavailable}>
+                    <Text
+                      style={[typeStyle(typeAccent.micro, width), styles.retry]}
+                      maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+                      重新查詢
+                    </Text>
                   </Pressable>
                 ) : null}
               </View>
             ) : unavailableCount > 0 ? (
               <View style={styles.statusRow}>
                 <Caption>{`已確認 ${unavailableCount} 筆無法取得`}</Caption>
-                <Pressable accessibilityRole="button" onPress={resolution.retryUnavailable}>
-                  <Text style={[styles.retry, { fontSize: scaleFont(12, width) }]}>重新查詢</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="重新查詢無法取得的照片"
+                  hitSlop={RETRY_HIT_SLOP}
+                  onPress={resolution.retryUnavailable}>
+                  <Text
+                    style={[typeStyle(typeAccent.micro, width), styles.retry]}
+                    maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+                    重新查詢
+                  </Text>
                 </Pressable>
-                <Pressable accessibilityRole="button" onPress={handleForgetUnavailable}>
-                  <Text style={[styles.retry, { fontSize: scaleFont(12, width) }]}>移出清單</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`把 ${unavailableCount} 筆無法取得的項目移出待刪除清單`}
+                  hitSlop={RETRY_HIT_SLOP}
+                  onPress={handleForgetUnavailable}>
+                  <Text
+                    style={[typeStyle(typeAccent.micro, width), styles.retry]}
+                    maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+                    移出清單
+                  </Text>
                 </Pressable>
               </View>
             ) : (
@@ -261,10 +486,12 @@ export default function ReviewScreen() {
               </Caption>
             )}
 
-            {resolvedCount === 0 ? (
+            {resolvedCount === 0 && gridItems.length === 0 ? (
               <View style={styles.emptyWrap}>
-                <View style={styles.empty}>
-                  <Text style={[styles.emptyTitle, { fontSize: scaleFont(18, width) }]}>
+                <PixelSurface style={styles.empty}>
+                  <Text
+                    style={[typeStyle(typeAccent.sectionTitle, width), styles.emptyTitle]}
+                    maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
                     {pendingCount > 0 ? '正在解析待刪除照片' : '沒有可顯示的待刪除照片'}
                   </Text>
                   <Body muted>
@@ -272,12 +499,12 @@ export default function ReviewScreen() {
                       ? '正在按 ID 查詢這些照片，查完之前不會清除任何標記。'
                       : '待刪除的照片都已不在你授權的相簿中，可以用上方的「移出清單」處理。'}
                   </Body>
-                </View>
+                </PixelSurface>
               </View>
             ) : (
               <FlatList
-                data={resolution.resolved}
-                keyExtractor={(item) => item.id}
+                data={gridItems}
+                keyExtractor={(item) => item.key}
                 numColumns={COLUMNS}
                 style={styles.grid}
                 columnWrapperStyle={{ gap }}
@@ -287,23 +514,7 @@ export default function ReviewScreen() {
                 initialNumToRender={18}
                 windowSize={5}
                 removeClippedSubviews
-                renderItem={({ item, index }) => (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`第 ${index + 1} 張待刪除照片`}
-                    onPress={() => setPreviewIndex(index)}
-                    style={({ pressed }) => [pressed && styles.cellPressed]}>
-                    <Image
-                      source={{ uri: item.uri }}
-                      style={{ width: cellSize, height: cellSize, borderRadius: radius.sm }}
-                      contentFit="cover"
-                      allowDownscaling
-                      recyclingKey={item.id}
-                      cachePolicy="memory-disk"
-                      transition={100}
-                    />
-                  </Pressable>
-                )}
+                renderItem={({ item }) => renderCell(item)}
               />
             )}
           </>
@@ -312,23 +523,40 @@ export default function ReviewScreen() {
 
       <View style={styles.footer}>
         {showDeleteZone ? (
-          <View style={styles.dangerZone}>
-            <Text style={[styles.dangerTitle, { fontSize: scaleFont(13, width) }]}>
-              安全刪除模式
-            </Text>
+          <PixelSurface
+            outlineWidth={border.widthThick}
+            outlineColor={colors.discardText}
+            style={styles.dangerZone}>
+            <View style={styles.dangerHeader}>
+              <PixelBadge label="安全刪除模式" tone="discard" />
+            </View>
             <Caption>
-              {`每次最多確認刪除 ${MAX_DELETE_COUNT_PER_BATCH} 張照片，刪除前仍會由 iPhone 再次確認`}
+              {`每次最多確認刪除 ${MAX_DELETE_COUNT_PER_BATCH} 張照片。按下後照片會移至 iPhone「最近刪除」，刪除前仍會由 iPhone 再次確認。`}
             </Caption>
 
             {deleting ? (
               <View style={styles.statusRow}>
-                <ActivityIndicator size="small" />
-                <Caption>正在刪除，請在 iPhone 的系統視窗確認…</Caption>
+                <PixelSpinner size={iconSize.sm} />
+                <Caption>正在等待 iPhone 系統確認…</Caption>
               </View>
+            ) : deleteOutcomeTone ? (
+              <PixelNotice
+                tone={deleteOutcomeTone}
+                compact
+                icon={
+                  <WarnIcon
+                    size={iconSize.sm}
+                    fill={deleteOutcomeTone === 'warning' ? colors.warning : colors.discard}
+                  />
+                }>
+                {deleteMessage}
+              </PixelNotice>
             ) : deleteMessage ? (
               <Caption>{deleteMessage}</Caption>
             ) : overBatchLimit ? (
-              <Text style={[styles.dangerHint, { fontSize: scaleFont(12, width) }]}>
+              <Text
+                style={[typeStyle(typeAccent.micro, width), styles.dangerHint]}
+                maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
                 {`每次最多刪除 ${MAX_DELETE_COUNT_PER_BATCH} 張，請先將待刪除數量減至 ${MAX_DELETE_COUNT_PER_BATCH} 張以內`}
               </Text>
             ) : !readyForDeletion ? (
@@ -347,7 +575,7 @@ export default function ReviewScreen() {
               disabled={!canDelete}
               onPress={handleRequestDelete}
             />
-          </View>
+          </PixelSurface>
         ) : null}
 
         {showSuccessSummary ? (
@@ -381,7 +609,8 @@ export default function ReviewScreen() {
         animationType="fade"
         statusBarTranslucent
         onRequestClose={() => setPreviewIndex(null)}>
-        <View style={styles.modal}>
+        {/* accessibilityViewIsModal：VoiceOver 焦點鎖在預覽內，不會跑回底下的網格。 */}
+        <View accessibilityViewIsModal style={styles.modal}>
           {previewPhoto && previewIndex !== null ? (
             <View
               style={[
@@ -398,21 +627,34 @@ export default function ReviewScreen() {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="關閉預覽"
-                  onPress={() => setPreviewIndex(null)}>
-                  <Text style={[styles.close, { fontSize: scaleFont(15, width) }]}>關閉</Text>
+                  hitSlop={12}
+                  onPress={() => setPreviewIndex(null)}
+                  style={styles.closeHit}>
+                  <Text
+                    style={[typeStyle(typeAccent.button, width), styles.close]}
+                    maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+                    關閉
+                  </Text>
                 </Pressable>
               </View>
 
-              <Image
-                source={{ uri: previewPhoto.uri }}
-                style={styles.modalPhoto}
-                // 全螢幕預覽維持 aspectFit，不裁切照片。
-                contentFit="contain"
-                allowDownscaling
-                recyclingKey={previewPhoto.id}
-                cachePolicy="memory-disk"
-                transition={120}
-              />
+              {/* 照片放在深色中性底上比較好看；硬陰影由 PixelSurface 畫在裁切層外面。 */}
+              <PixelSurface
+                background={colors.outline}
+                wrapperStyle={styles.modalPhotoWrapper}
+                style={styles.modalPhotoBox}
+                clip>
+                <Image
+                  source={{ uri: previewPhoto.uri }}
+                  style={styles.modalPhoto}
+                  // 全螢幕預覽維持 aspectFit，不裁切照片。
+                  contentFit="contain"
+                  allowDownscaling
+                  recyclingKey={previewPhoto.id}
+                  cachePolicy="memory-disk"
+                  transition={120}
+                />
+              </PixelSurface>
 
               <View style={styles.modalFooter}>
                 <Caption>{formatPhotoDate(previewPhoto.createdAt)}</Caption>
@@ -440,12 +682,25 @@ export default function ReviewScreen() {
                 </View>
                 <Pressable
                   accessibilityRole="button"
-                  onPress={() => handleKeepInstead(previewPhoto.id)}
-                  style={({ pressed }) => [styles.keepBack, pressed && styles.cellPressed]}>
-                  <CheckIcon size={18} color={colors.keep} />
-                  <Text style={[styles.keepBackText, { fontSize: scaleFont(15, width) }]}>
-                    改為保留
-                  </Text>
+                  accessibilityLabel="把這張照片改為保留"
+                  onPress={() => handleKeepInstead(previewPhoto.id)}>
+                  {({ pressed }) => (
+                    <PixelSurface
+                      outlineWidth={border.widthThick}
+                      outlineColor={colors.keepText}
+                      shadowOffset={pressed ? shadow.pressOffset : shadow.offset}
+                      style={[
+                        styles.keepBack,
+                        pressed ? { transform: [{ translateY: shadow.pressOffset }] } : null,
+                      ]}>
+                      <CheckIcon size={iconSize.md} fill={colors.keep} />
+                      <Text
+                        style={[typeStyle(typeAccent.button, width), styles.keepBackText]}
+                        maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+                        改為保留
+                      </Text>
+                    </PixelSurface>
+                  )}
                 </Pressable>
               </View>
             </View>
@@ -458,18 +713,41 @@ export default function ReviewScreen() {
 
 const styles = StyleSheet.create({
   screen: {
-    gap: spacing.md,
+    gap: spacing.ms,
   },
   header: {
     gap: spacing.sm,
   },
   heading: {
-    color: colors.text,
+    color: colors.textPrimary,
     fontWeight: '700',
   },
   stats: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
+  },
+  /** 解析狀態的容器：無陰影、淡底，視覺層級低於主要統計。 */
+  resolveGroup: {
+    gap: spacing.sm,
+    paddingBottom: spacing.sm,
+    paddingHorizontal: spacing.ms,
+  },
+  dotDivider: {
+    flexDirection: 'row',
+    gap: 4,
+    justifyContent: 'center',
+    paddingTop: spacing.sm,
+  },
+  dot: {
+    backgroundColor: colors.outline,
+    height: 2,
+    opacity: 0.35,
+    width: 2,
+  },
+  // 字級與 lineHeight 都交給 typeAccent.micro，這裡只留顏色。
+  groupLabel: {
+    color: colors.textSecondary,
   },
   stage: {
     flex: 1,
@@ -478,10 +756,11 @@ const styles = StyleSheet.create({
   statusRow: {
     alignItems: 'center',
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
   },
   retry: {
-    color: colors.warning,
+    color: colors.warningText,
     fontWeight: '600',
   },
   grid: {
@@ -490,48 +769,66 @@ const styles = StyleSheet.create({
   cellPressed: {
     opacity: 0.7,
   },
+  /** 非照片狀態格：置中的圖示 + 文字，不只靠顏色。 */
+  cellState: {
+    alignItems: 'center',
+    gap: spacing.xs,
+    justifyContent: 'center',
+  },
+  cellStateText: {
+    color: colors.textSecondary,
+    textAlign: 'center',
+  },
+  cellStateDone: {
+    color: colors.keepText,
+    fontWeight: '700',
+  },
   emptyWrap: {
     flex: 1,
     justifyContent: 'center',
   },
   empty: {
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
     gap: spacing.sm,
-    padding: spacing.lg,
+    padding: spacing.md,
   },
   emptyTitle: {
-    color: colors.text,
+    color: colors.textPrimary,
     fontWeight: '700',
   },
   successCard: {
-    borderColor: colors.keep,
-    borderWidth: StyleSheet.hairlineWidth * 3,
+    alignItems: 'center',
+    gap: spacing.sm,
+    padding: spacing.md,
+  },
+  starRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  star: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   successTitle: {
-    color: colors.keep,
+    color: colors.keepText,
     fontWeight: '700',
     textAlign: 'center',
   },
   footer: {
     gap: spacing.sm,
   },
+  /** 安全刪除區：3px discard 描邊，但底色維持 surface，不用整塊高飽和紅。 */
   dangerZone: {
-    backgroundColor: colors.surfaceAlt,
-    borderColor: colors.discard,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
     gap: spacing.sm,
-    padding: spacing.sm,
+    padding: spacing.ms,
   },
-  dangerTitle: {
-    color: colors.discard,
-    fontWeight: '600',
-    textAlign: 'center',
+  dangerHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
   },
   dangerHint: {
-    color: colors.warning,
+    color: colors.warningText,
     fontWeight: '600',
   },
   modal: {
@@ -547,13 +844,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
+  closeHit: {
+    justifyContent: 'center',
+    minHeight: 44,
+    minWidth: 44,
+  },
   close: {
-    color: colors.accent,
-    fontWeight: '600',
+    color: colors.primaryText,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+  modalPhotoWrapper: {
+    flex: 1,
+  },
+  modalPhotoBox: {
+    flex: 1,
   },
   modalPhoto: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
     flex: 1,
     width: '100%',
   },
@@ -569,17 +876,12 @@ const styles = StyleSheet.create({
   },
   keepBack: {
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderColor: colors.keep,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth * 3,
     flexDirection: 'row',
     gap: spacing.sm,
     justifyContent: 'center',
-    minHeight: 52,
+    minHeight: 48,
   },
   keepBackText: {
-    color: colors.keep,
-    fontWeight: '700',
+    color: colors.keepText,
   },
 });

@@ -8,7 +8,8 @@ import { colors } from '@/lib/theme';
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" />
+      {/* 奶油白背景需要深色狀態列文字。 */}
+      <StatusBar style="dark" />
       <CleanupProvider>
         <Stack
           screenOptions={{

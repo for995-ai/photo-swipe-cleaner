@@ -1,7 +1,12 @@
-import * as Haptics from 'expo-haptics';
+/**
+ * 共用 UI 元件。
+ *
+ * Beta 0.4：內部改用 components/pixel/* 的像素風實作，
+ * 但所有元件的對外 props、variant 與 tone 名稱完全不變，
+ * 因此各頁面不需要任何修改就會換皮。
+ */
 import type { ReactNode } from 'react';
 import {
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,7 +18,13 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { colors, radius, scaleFont, spacing } from '@/lib/theme';
+import { PixelBadge, type PixelBadgeTone } from '@/components/pixel/pixel-badge';
+import { PixelButton, type PixelButtonTone } from '@/components/pixel/pixel-button';
+import { PixelNotice, type PixelNoticeTone } from '@/components/pixel/pixel-notice';
+import { PixelProgress } from '@/components/pixel/pixel-progress';
+import { PixelSurface } from '@/components/pixel/pixel-surface';
+import { colors, radius, shadow, spacing } from '@/lib/theme';
+import { textScaling, typeAccent, typeScale, typeStyle } from '@/lib/typography';
 
 /**
  * 畫面外框：套用 Safe Area 並可選擇是否捲動。
@@ -51,18 +62,19 @@ export function Screen({
 }
 
 /**
- * 主標題。刻意用 numberOfLines + adjustsFontSizeToFit 收斂字級，
- * 避免最後一個字被擠到單獨一行。
+ * 主標題。
+ *
+ * 階段 9 移除 adjustsFontSizeToFit / minimumFontScale：
+ * 那組屬性會在使用者放大字級時把標題縮回原尺寸，Dynamic Type 等於失效。
+ * 標題本來就短，放大時直接換行即可，預設留 3 行的空間。
  */
-export function Title({ children, lines = 2 }: { children: ReactNode; lines?: number }) {
+export function Title({ children, lines = 3 }: { children: ReactNode; lines?: number }) {
   const { width } = useWindowDimensions();
-  const fontSize = scaleFont(26, width);
   return (
     <Text
-      style={[styles.title, { fontSize, lineHeight: Math.round(fontSize * 1.35) }]}
+      style={[typeStyle(typeScale.title, width), styles.title]}
       numberOfLines={lines}
-      adjustsFontSizeToFit
-      minimumFontScale={0.8}>
+      maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
       {children}
     </Text>
   );
@@ -73,9 +85,10 @@ export function Body({ children, muted = false }: { children: ReactNode; muted?:
   return (
     <Text
       style={[
-        styles.body,
-        { fontSize: scaleFont(16, width), color: muted ? colors.textMuted : colors.text },
-      ]}>
+        typeStyle(typeScale.body, width),
+        { color: muted ? colors.textSecondary : colors.textPrimary },
+      ]}
+      maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
       {children}
     </Text>
   );
@@ -83,7 +96,13 @@ export function Body({ children, muted = false }: { children: ReactNode; muted?:
 
 export function Caption({ children }: { children: ReactNode }) {
   const { width } = useWindowDimensions();
-  return <Text style={[styles.caption, { fontSize: scaleFont(13, width) }]}>{children}</Text>;
+  return (
+    <Text
+      style={[typeStyle(typeScale.caption, width), styles.caption]}
+      maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+      {children}
+    </Text>
+  );
 }
 
 /** 提示卡：用於有限存取、拒絕、空相簿、錯誤等狀態說明。 */
@@ -92,29 +111,24 @@ export function Notice({
   title,
   children,
 }: {
-  tone?: 'info' | 'warning' | 'danger' | 'success';
+  tone?: PixelNoticeTone;
   title?: string;
   children: ReactNode;
 }) {
-  const { width } = useWindowDimensions();
-  const accent = {
-    info: colors.accent,
-    warning: colors.warning,
-    danger: colors.discard,
-    success: colors.keep,
-  }[tone];
-
   return (
-    <View style={[styles.notice, { borderLeftColor: accent }]}>
-      {title ? (
-        <Text style={[styles.noticeTitle, { color: accent, fontSize: scaleFont(14, width) }]}>
-          {title}
-        </Text>
-      ) : null}
-      <Text style={[styles.noticeBody, { fontSize: scaleFont(14, width) }]}>{children}</Text>
-    </View>
+    <PixelNotice tone={tone} title={title}>
+      {children}
+    </PixelNotice>
   );
 }
+
+/** variant 名稱不變，只是對應到像素風的 tone。 */
+const BUTTON_TONE: Record<'primary' | 'secondary' | 'ghost' | 'danger', PixelButtonTone> = {
+  primary: 'primary',
+  secondary: 'neutral',
+  ghost: 'plain',
+  danger: 'discard',
+};
 
 export function AppButton({
   label,
@@ -127,47 +141,13 @@ export function AppButton({
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   disabled?: boolean;
 }) {
-  const { width } = useWindowDimensions();
-
-  const handlePress = () => {
-    if (Platform.OS !== 'web') {
-      // 觸覺回饋失敗不應影響操作，例如模擬器或不支援的裝置。
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    }
-    onPress();
-  };
-
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled }}
+    <PixelButton
+      label={label}
+      onPress={onPress}
+      tone={BUTTON_TONE[variant]}
       disabled={disabled}
-      onPress={handlePress}
-      style={({ pressed }) => [
-        styles.button,
-        variant === 'primary' && styles.buttonPrimary,
-        variant === 'secondary' && styles.buttonSecondary,
-        variant === 'ghost' && styles.buttonGhost,
-        variant === 'danger' && styles.buttonDanger,
-        pressed && !disabled && styles.buttonPressed,
-        disabled && styles.buttonDisabled,
-      ]}>
-      <Text
-        style={[
-          styles.buttonLabel,
-          // ghost 用小一號字＋窄一點的內距，並排時才不會被截成「重新開始本次…」
-          { fontSize: scaleFont(variant === 'ghost' ? 14 : 16, width) },
-          variant === 'primary' && styles.buttonLabelPrimary,
-          variant === 'danger' && styles.buttonLabelPrimary,
-          variant === 'ghost' && styles.buttonLabelGhost,
-          disabled && styles.buttonLabelDisabled,
-        ]}
-        numberOfLines={1}
-        adjustsFontSizeToFit
-        minimumFontScale={0.85}>
-        {label}
-      </Text>
-    </Pressable>
+    />
   );
 }
 
@@ -179,37 +159,26 @@ export function StatChip({
 }: {
   label: string;
   value: number;
-  tone: 'keep' | 'discard' | 'info' | 'warning' | 'neutral';
+  tone: PixelBadgeTone;
 }) {
-  const { width } = useWindowDimensions();
-  const color = {
-    keep: colors.keep,
-    discard: colors.discard,
-    info: colors.accent,
-    warning: colors.warning,
-    neutral: colors.textMuted,
-  }[tone];
-  return (
-    <View style={styles.chip}>
-      <View style={[styles.chipDot, { backgroundColor: color }]} />
-      <Text style={[styles.chipLabel, { fontSize: scaleFont(12, width) }]}>{label}</Text>
-      <Text style={[styles.chipValue, { color, fontSize: scaleFont(13, width) }]}>{value}</Text>
-    </View>
-  );
+  return <PixelBadge label={label} value={value} tone={tone} />;
 }
 
 export function ProgressBar({ value, total }: { value: number; total: number }) {
-  const ratio = total > 0 ? Math.min(Math.max(value / total, 0), 1) : 0;
   return (
-    <View style={styles.progressTrack}>
-      <View style={[styles.progressFill, { width: `${ratio * 100}%` }]} />
-    </View>
+    <PixelProgress
+      value={value}
+      total={total}
+      accessibilityLabel={`已處理 ${value} / 約 ${total} 張`}
+    />
   );
 }
 
 /**
  * 底部整理按鈕（圖示 + 文字）。
  * 這裡不做觸覺回饋：決定完成時由卡片動畫統一觸發，避免震兩次。
+ *
+ * 本輪只套用共用描邊、硬陰影與按壓效果，圖示與尺寸維持原樣。
  */
 export function ActionButton({
   label,
@@ -225,8 +194,13 @@ export function ActionButton({
   disabled?: boolean;
 }) {
   const { width } = useWindowDimensions();
-  const accent =
-    tone === 'keep' ? colors.keep : tone === 'discard' ? colors.discard : colors.textMuted;
+  // 文字前景要用深色版本；粉彩本色留給傳入的圖示與裝飾。
+  const labelColor =
+    tone === 'keep'
+      ? colors.keepText
+      : tone === 'discard'
+        ? colors.discardText
+        : colors.textSecondary;
 
   return (
     <Pressable
@@ -234,22 +208,42 @@ export function ActionButton({
       accessibilityLabel={label}
       accessibilityState={{ disabled }}
       disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.action,
-        { borderColor: disabled ? colors.border : accent },
-        pressed && !disabled && styles.buttonPressed,
-        disabled && styles.actionDisabled,
-      ]}>
-      <View style={disabled && styles.actionIconDisabled}>{icon}</View>
-      <Text
-        style={[
-          styles.actionLabel,
-          { color: disabled ? colors.textMuted : accent, fontSize: scaleFont(13, width) },
-        ]}
-        numberOfLines={1}>
-        {label}
-      </Text>
+      onPress={onPress}>
+      {({ pressed }) => {
+        const active = pressed && !disabled;
+        const offset = disabled ? 0 : active ? shadow.pressOffset : shadow.offset;
+
+        return (
+          <PixelSurface
+            background={disabled ? colors.disabledSurface : colors.surface}
+            outlineColor={disabled ? colors.disabledText : colors.outline}
+            cornerRadius={radius.md}
+            shadowOffset={offset}
+            style={[
+              styles.action,
+              active ? { transform: [{ translateY: shadow.pressOffset }] } : null,
+            ]}>
+            <View style={disabled ? styles.actionIconDisabled : undefined}>{icon}</View>
+            <Text
+              style={[
+                typeStyle(typeAccent.badgeValue, width),
+                styles.actionLabel,
+                { color: disabled ? colors.disabledText : labelColor },
+              ]}
+              /**
+               * 這裡是唯一保留縮字的地方：三顆按鈕平分寬度、旁邊還有 32px 圖示，
+               * 換行會把照片區推高。改成先換行、真的放不下才縮字，
+               * 下限拉高到 0.9（13pt → 至少 11.7pt），不會縮到難以閱讀。
+               */
+              numberOfLines={2}
+              adjustsFontSizeToFit
+              minimumFontScale={0.9}
+              maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+              {label}
+            </Text>
+          </PixelSurface>
+        );
+      }}
     </Pressable>
   );
 }
@@ -263,122 +257,29 @@ const styles = StyleSheet.create({
     flexGrow: 1,
   },
   title: {
-    color: colors.text,
-    fontWeight: '700',
-    lineHeight: 38,
-  },
-  body: {
-    lineHeight: 24,
+    color: colors.textPrimary,
   },
   caption: {
-    color: colors.textMuted,
-    lineHeight: 19,
+    color: colors.textSecondary,
   },
-  notice: {
-    backgroundColor: colors.surface,
-    borderLeftWidth: 3,
-    borderRadius: radius.sm,
-    gap: spacing.xs,
-    padding: spacing.md,
-  },
-  noticeTitle: {
-    fontWeight: '600',
-  },
-  noticeBody: {
-    color: colors.textMuted,
-    lineHeight: 21,
-  },
-  button: {
-    alignItems: 'center',
-    borderRadius: radius.md,
-    justifyContent: 'center',
-    minHeight: 52,
-    paddingHorizontal: spacing.lg,
-  },
-  buttonPrimary: {
-    backgroundColor: colors.accent,
-  },
-  buttonSecondary: {
-    backgroundColor: colors.surfaceAlt,
-    borderColor: colors.border,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  buttonGhost: {
-    minHeight: 44,
-    paddingHorizontal: spacing.sm,
-  },
-  buttonDanger: {
-    backgroundColor: colors.discard,
-  },
-  buttonPressed: {
-    opacity: 0.75,
-  },
-  buttonDisabled: {
-    backgroundColor: colors.disabled,
-  },
-  buttonLabel: {
-    color: colors.text,
-    fontWeight: '600',
-  },
-  buttonLabelPrimary: {
-    color: colors.accentText,
-  },
-  buttonLabelGhost: {
-    color: colors.textMuted,
-    fontWeight: '500',
-  },
-  buttonLabelDisabled: {
-    color: colors.textMuted,
-  },
-  chip: {
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: radius.sm,
-    flexDirection: 'row',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-  },
-  chipDot: {
-    borderRadius: 4,
-    height: 8,
-    width: 8,
-  },
-  chipLabel: {
-    color: colors.textMuted,
-  },
-  chipValue: {
-    fontWeight: '700',
-  },
-  progressTrack: {
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: 2,
-    height: 4,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    backgroundColor: colors.accent,
-    borderRadius: 2,
-    height: '100%',
-  },
+  /**
+   * 圖示與標籤改為橫向排列。
+   * 這樣 32px 圖示放得進來，總高度反而從 62 降到 52（48 + 4px 陰影），
+   * 省下的 10px 全部還給照片區，觸控高度仍遠超過 44pt。
+   */
   action: {
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth * 3,
-    gap: spacing.xs,
+    flexDirection: 'row',
+    gap: spacing.sm,
     justifyContent: 'center',
-    minHeight: 62,
+    minHeight: 48,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
   },
-  actionDisabled: {
-    backgroundColor: colors.background,
+  actionLabel: {
+    flexShrink: 1,
   },
   actionIconDisabled: {
     opacity: 0.4,
-  },
-  actionLabel: {
-    fontWeight: '600',
   },
 });

@@ -1,17 +1,21 @@
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-  useWindowDimensions,
-} from 'react-native';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { Alert, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
-import { CheckIcon } from '@/components/icons';
-import { AppButton, Body, Caption, Notice, Screen, Title } from '@/components/ui';
+import {
+  AlbumIcon,
+  CalendarIcon,
+  CheckIcon,
+  PhotoIcon,
+  ScreenshotIcon,
+  WarnIcon,
+} from '@/components/icons';
+import { PixelBadge } from '@/components/pixel/pixel-badge';
+import { PixelButton } from '@/components/pixel/pixel-button';
+import { PixelNotice } from '@/components/pixel/pixel-notice';
+import { PixelSpinner } from '@/components/pixel/pixel-spinner';
+import { PixelSurface } from '@/components/pixel/pixel-surface';
+import { AppButton, Body, Caption, Screen, Title } from '@/components/ui';
 import { useCleanup } from '@/hooks/use-cleanup';
 import { describeError, loadPhotoAlbumsAsync, type PhotoAlbum } from '@/lib/photos';
 import {
@@ -23,7 +27,8 @@ import {
   scopeLabel,
   type CleanupScope,
 } from '@/lib/scope';
-import { colors, radius, scaleFont, spacing } from '@/lib/theme';
+import { border, colors, iconSize, radius, shadow, spacing } from '@/lib/theme';
+import { textScaling, typeAccent, typeStyle } from '@/lib/typography';
 
 type Panel = 'none' | 'month' | 'album';
 
@@ -101,41 +106,69 @@ export default function ScopeScreen() {
     scope: CleanupScope,
     title: string,
     detail: string,
-    options?: { disabled?: boolean; onPress?: () => void; trailing?: string }
+    icon: ReactNode,
+    options?: {
+      disabled?: boolean;
+      onPress?: () => void;
+      trailing?: string;
+      unavailable?: boolean;
+      accessibilityLabel?: string;
+    }
   ) => {
     const selected = scopeKey(scope) === currentKey;
     // 沒有讀取權限時所有選項都只是預覽，不能真的選取。
     const disabled = (options?.disabled ?? false) || !granted;
+
     return (
       <Pressable
         key={title}
         accessibilityRole="button"
+        accessibilityLabel={
+          options?.accessibilityLabel ??
+          `${title}${selected ? '，目前選取中' : ''}${disabled ? '，無法使用' : ''}。${detail}`
+        }
         accessibilityState={{ disabled, selected }}
         disabled={disabled}
-        onPress={options?.onPress ?? (() => chooseScope(scope))}
-        style={({ pressed }) => [
-          styles.option,
-          selected && styles.optionSelected,
-          pressed && !disabled && styles.pressed,
-          disabled && styles.optionDisabled,
-        ]}>
-        <View style={styles.optionText}>
-          <Text
+        onPress={options?.onPress ?? (() => chooseScope(scope))}>
+        {({ pressed }) => (
+          <PixelSurface
+            background={selected ? colors.surfaceAlt : colors.surface}
+            outlineColor={disabled ? colors.disabledText : colors.outline}
+            outlineWidth={selected ? border.widthThick : border.width}
+            // 停用態不畫陰影；按下時陰影縮短並讓內容下移。
+            shadowOffset={disabled ? 0 : pressed ? shadow.pressOffset : shadow.offset}
             style={[
-              styles.optionTitle,
-              { fontSize: scaleFont(16, width) },
-              disabled && styles.mutedText,
+              styles.option,
+              pressed && !disabled ? { transform: [{ translateY: shadow.pressOffset }] } : null,
             ]}>
-            {title}
-          </Text>
-          <Caption>{detail}</Caption>
-        </View>
-        {options?.trailing ? (
-          <Text style={[styles.trailing, { fontSize: scaleFont(12, width) }]}>
-            {options.trailing}
-          </Text>
-        ) : null}
-        {selected ? <CheckIcon size={18} color={colors.keep} /> : null}
+            <View style={disabled ? styles.iconDisabled : undefined}>{icon}</View>
+
+            <View style={styles.optionText}>
+              <Text
+                style={[
+                  typeStyle(typeAccent.button, width),
+                  styles.optionTitle,
+                  disabled && styles.mutedText,
+                ]}
+                maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+                {title}
+              </Text>
+              <Caption>{detail}</Caption>
+            </View>
+
+            {options?.unavailable ? <PixelBadge label="無法使用" tone="neutral" /> : null}
+
+            {options?.trailing ? (
+              <Text
+                style={[typeStyle(typeAccent.badgeLabel, width), styles.trailing]}
+                maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+                {options.trailing}
+              </Text>
+            ) : null}
+
+            {selected ? <CheckIcon size={iconSize.sm} fill={colors.keep} /> : null}
+          </PixelSurface>
+        )}
       </Pressable>
     );
   };
@@ -150,31 +183,41 @@ export default function ScopeScreen() {
 
       {/* 相簿失效等情況帶回來的一次性提示，選定任一範圍後即清除。 */}
       {scopeController.notice ? (
-        <Notice tone="warning" title="需要重新選擇範圍">
+        <PixelNotice
+          tone="warning"
+          title="需要重新選擇範圍"
+          icon={<WarnIcon size={iconSize.sm} fill={colors.warning} />}>
           {scopeController.notice}
-        </Notice>
+        </PixelNotice>
       ) : null}
 
       {!granted ? (
         <View style={styles.gate}>
-          <Notice tone="warning" title="需要相簿權限才能選擇整理範圍">
+          <PixelNotice
+            tone="warning"
+            title="需要相簿權限才能選擇整理範圍"
+            icon={<WarnIcon size={iconSize.sm} fill={colors.warning} />}>
             還沒取得相簿讀取權限，所以現在不會去讀取任何照片或相簿。請先完成授權再回來選範圍。
-          </Notice>
+          </PixelNotice>
           <AppButton label="前往權限頁" onPress={() => router.push('/permission')} />
         </View>
       ) : (
         <>
           {accessLevel === 'limited' ? (
-            <Notice tone="warning" title="有限存取">
+            <PixelNotice
+              tone="warning"
+              title="有限存取"
+              icon={<WarnIcon size={iconSize.sm} fill={colors.warning} />}>
               目前只會顯示 iPhone 已允許存取的照片內容，相簿清單與各範圍的張數都可能不完整。
-            </Notice>
+            </PixelNotice>
           ) : null}
 
           {/* 有上次使用的範圍就直接續用，不必再翻開月份或相簿重選一次。 */}
           {scopeController.restored ? (
-            <View style={styles.resume}>
-              <AppButton
+            <PixelSurface background={colors.surfaceAlt} style={styles.resume}>
+              <PixelButton
                 label={`繼續整理：${scopeLabel(scopeController.scope)}`}
+                accessibilityLabel={`繼續整理 ${scopeLabel(scopeController.scope)}`}
                 onPress={() => activateAndOpen(scopeController.scope)}
               />
               <Caption>
@@ -182,68 +225,102 @@ export default function ScopeScreen() {
                   ? `這個範圍已處理 ${session.processedCount} 張，會從上次的位置接著整理。`
                   : '會沿用上次選的範圍，進度與統計都會接續。'}
               </Caption>
-            </View>
+            </PixelSurface>
           ) : null}
         </>
       )}
 
       <View style={styles.list}>
-        {renderOption({ type: 'all' }, '所有照片', '從最新往舊整理整個相簿。')}
+        {renderOption(
+          { type: 'all' },
+          '所有照片',
+          '從最新往舊整理整個相簿。',
+          <PhotoIcon size={iconSize.lg} fill={colors.primary} />
+        )}
 
         {SCREENSHOT_SUPPORTED
-          ? renderOption({ type: 'screenshots' }, '截圖', '只整理系統標記為截圖的照片。')
-          : renderOption({ type: 'screenshots' }, '截圖', '這台裝置無法可靠辨識截圖，暫時無法使用。', {
-              disabled: true,
-              trailing: '無法使用',
-            })}
+          ? renderOption(
+              { type: 'screenshots' },
+              '截圖',
+              '只整理系統標記為截圖的照片。',
+              <ScreenshotIcon size={iconSize.lg} fill={colors.primary} />
+            )
+          : renderOption(
+              { type: 'screenshots' },
+              '截圖',
+              '這台裝置無法可靠辨識截圖，暫時無法使用。',
+              <ScreenshotIcon size={iconSize.lg} fill={colors.disabledText} />,
+              { disabled: true, unavailable: true }
+            )}
 
         {renderOption(
           { type: 'recent30Days' },
           `最近 ${RECENT_DAYS} 天`,
-          `只整理最近 ${RECENT_DAYS} 天拍的照片。`
+          `只整理最近 ${RECENT_DAYS} 天拍的照片。`,
+          <CalendarIcon size={iconSize.lg} fill={colors.primary} />
         )}
 
-        {renderOption({ type: 'month', month: '' }, '依月份選擇', `列出最近 ${MONTH_OPTION_COUNT} 個月。`, {
-          onPress: () => setPanel(panel === 'month' ? 'none' : 'month'),
-          trailing: panel === 'month' ? '收起' : '展開',
-        })}
+        {renderOption(
+          { type: 'month', month: '' },
+          '依月份選擇',
+          `列出最近 ${MONTH_OPTION_COUNT} 個月。`,
+          <CalendarIcon size={iconSize.lg} fill={colors.warning} />,
+          {
+            onPress: () => setPanel(panel === 'month' ? 'none' : 'month'),
+            trailing: panel === 'month' ? '收起' : '展開',
+            accessibilityLabel: `依月份選擇，${panel === 'month' ? '收起' : '展開'}月份清單`,
+          }
+        )}
 
         {panel === 'month' ? (
-          <View style={styles.chipWrap}>
+          <PixelSurface background={colors.surfaceAlt} style={styles.chipWrap} shadowOffset={0}>
             {listRecentMonths().map((option) => {
               const selected = currentKey === `month:${option.month}`;
               return (
                 <Pressable
                   key={option.month}
                   accessibilityRole="button"
+                  accessibilityLabel={`${option.label}${selected ? '，目前選取中' : ''}`}
+                  accessibilityState={{ disabled: !granted, selected }}
                   disabled={!granted}
-                  onPress={() => chooseScope({ type: 'month', month: option.month })}
-                  style={({ pressed }) => [
-                    styles.chip,
-                    selected && styles.chipSelected,
-                    pressed && styles.pressed,
-                  ]}>
-                  <Text
-                    style={[
-                      styles.chipText,
-                      { fontSize: scaleFont(13, width) },
-                      selected && styles.chipTextSelected,
-                    ]}>
-                    {option.label}
-                  </Text>
+                  onPress={() => chooseScope({ type: 'month', month: option.month })}>
+                  {({ pressed }) => (
+                    <PixelSurface
+                      background={selected ? colors.primary : colors.surface}
+                      outlineWidth={selected ? border.widthThick : border.width}
+                      cornerRadius={radius.sm}
+                      shadowOffset={pressed ? 0 : shadow.pressOffset}
+                      style={styles.chip}>
+                      <Text
+                        style={[
+                          typeStyle(typeAccent.badgeLabel, width),
+                          selected ? styles.chipTextSelected : styles.chipText,
+                        ]}
+                        maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+                        {option.label}
+                      </Text>
+                    </PixelSurface>
+                  )}
                 </Pressable>
               );
             })}
-          </View>
+          </PixelSurface>
         ) : null}
 
-        {renderOption({ type: 'album', albumId: '', albumTitle: '' }, '指定相簿', '從你自己建立的相簿挑一個。', {
-          onPress: () => setPanel(panel === 'album' ? 'none' : 'album'),
-          trailing: panel === 'album' ? '收起' : '展開',
-        })}
+        {renderOption(
+          { type: 'album', albumId: '', albumTitle: '' },
+          '指定相簿',
+          '從你自己建立的相簿挑一個。',
+          <AlbumIcon size={iconSize.lg} fill={colors.keep} />,
+          {
+            onPress: () => setPanel(panel === 'album' ? 'none' : 'album'),
+            trailing: panel === 'album' ? '收起' : '展開',
+            accessibilityLabel: `指定相簿，${panel === 'album' ? '收起' : '展開'}相簿清單`,
+          }
+        )}
 
         {panel === 'album' ? (
-          <View style={styles.panel}>
+          <PixelSurface background={colors.surfaceAlt} style={styles.panel} shadowOffset={0}>
             {!granted ? (
               <>
                 <Caption>需要相簿權限才能列出相簿。</Caption>
@@ -255,14 +332,17 @@ export default function ScopeScreen() {
               </>
             ) : albumsLoading ? (
               <View style={styles.loadingRow}>
-                <ActivityIndicator size="small" />
+                <PixelSpinner size={iconSize.sm} />
                 <Caption>正在讀取相簿清單…</Caption>
               </View>
             ) : albumsError ? (
               <>
-                <Notice tone="danger" title="讀取相簿清單失敗">
+                <PixelNotice
+                  tone="danger"
+                  title="讀取相簿清單失敗"
+                  icon={<WarnIcon size={iconSize.sm} fill={colors.discard} />}>
                   {albumsError}
-                </Notice>
+                </PixelNotice>
                 <AppButton label="重試" variant="secondary" onPress={loadAlbums} />
               </>
             ) : albums.length === 0 ? (
@@ -274,26 +354,38 @@ export default function ScopeScreen() {
                   <Pressable
                     key={album.id}
                     accessibilityRole="button"
+                    accessibilityLabel={`相簿 ${album.title}，${album.photoCount} 張照片${selected ? '，目前選取中' : ''}`}
+                    accessibilityState={{ selected }}
                     onPress={() =>
                       chooseScope({ type: 'album', albumId: album.id, albumTitle: album.title })
-                    }
-                    style={({ pressed }) => [
-                      styles.albumRow,
-                      selected && styles.optionSelected,
-                      pressed && styles.pressed,
-                    ]}>
-                    <Text
-                      style={[styles.albumTitle, { fontSize: scaleFont(15, width) }]}
-                      numberOfLines={1}>
-                      {album.title}
-                    </Text>
-                    <Caption>{`${album.photoCount} 張`}</Caption>
-                    {selected ? <CheckIcon size={16} color={colors.keep} /> : null}
+                    }>
+                    {({ pressed }) => (
+                      <PixelSurface
+                        // 選取態與上方選項卡一致：底色換 surfaceAlt、描邊加粗、右側加勾。
+                        background={selected ? colors.surfaceAlt : colors.surface}
+                        outlineWidth={selected ? border.widthThick : border.width}
+                        cornerRadius={radius.sm}
+                        shadowOffset={pressed ? shadow.pressOffset : shadow.offset}
+                        style={[
+                          styles.albumRow,
+                          pressed ? { transform: [{ translateY: shadow.pressOffset }] } : null,
+                        ]}>
+                        <AlbumIcon size={iconSize.sm} fill={colors.keep} />
+                        <Text
+                          style={[typeStyle(typeAccent.badgeValue, width), styles.albumTitle]}
+                          numberOfLines={1}
+                          maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
+                          {album.title}
+                        </Text>
+                        <PixelBadge label={`${album.photoCount} 張`} tone="info" />
+                        {selected ? <CheckIcon size={iconSize.sm} fill={colors.keep} /> : null}
+                      </PixelSurface>
+                    )}
                   </Pressable>
                 );
               })
             )}
-          </View>
+          </PixelSurface>
         ) : null}
       </View>
 
@@ -317,56 +409,37 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   resume: {
-    backgroundColor: colors.surface,
-    borderColor: colors.accent,
-    borderLeftWidth: 3,
-    borderRadius: radius.sm,
     gap: spacing.sm,
-    padding: spacing.md,
+    padding: spacing.ms,
   },
   list: {
-    gap: spacing.sm,
+    gap: spacing.ms,
   },
   option: {
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
-    gap: spacing.sm,
-    padding: spacing.md,
+    gap: spacing.ms,
+    padding: spacing.ms,
   },
-  optionSelected: {
-    borderColor: colors.keep,
-    borderWidth: StyleSheet.hairlineWidth * 3,
-  },
-  optionDisabled: {
-    backgroundColor: colors.background,
-  },
-  pressed: {
-    opacity: 0.72,
+  iconDisabled: {
+    opacity: 0.45,
   },
   optionText: {
     flex: 1,
     gap: spacing.xs,
   },
   optionTitle: {
-    color: colors.text,
-    fontWeight: '700',
+    color: colors.textPrimary,
   },
   mutedText: {
-    color: colors.textMuted,
+    color: colors.textSecondary,
   },
   trailing: {
-    color: colors.accent,
-    fontWeight: '600',
+    color: colors.primaryText,
   },
   panel: {
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: radius.sm,
     gap: spacing.sm,
-    padding: spacing.md,
+    padding: spacing.ms,
   },
   loadingRow: {
     alignItems: 'center',
@@ -374,47 +447,38 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   chipWrap: {
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: radius.sm,
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
-    padding: spacing.md,
+    padding: spacing.ms,
   },
+  /** 月份 chip 原本只有約 36pt 高，補到 44pt 才符合最小觸控目標。 */
   chip: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+    minWidth: 44,
+    paddingHorizontal: spacing.ms,
     paddingVertical: spacing.sm,
   },
-  chipSelected: {
-    borderColor: colors.keep,
-    borderWidth: StyleSheet.hairlineWidth * 3,
-  },
   chipText: {
-    color: colors.text,
+    color: colors.textPrimary,
   },
   chipTextSelected: {
-    color: colors.keep,
-    fontWeight: '700',
+    color: colors.onColor,
   },
+  /** 相簿列同樣保證 44pt 觸控高度（原本約 40pt）。 */
   albumRow: {
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: spacing.sm,
-    paddingHorizontal: spacing.md,
+    minHeight: 44,
+    paddingHorizontal: spacing.ms,
     paddingVertical: spacing.sm,
   },
   albumTitle: {
-    color: colors.text,
+    color: colors.textPrimary,
     flex: 1,
-    fontWeight: '600',
   },
   footer: {
     gap: spacing.sm,
