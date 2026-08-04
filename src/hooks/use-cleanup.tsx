@@ -31,7 +31,7 @@ export function CleanupProvider({ children }: { children: ReactNode }) {
 
   // 掛載時只查詢權限、不請求，所以這裡不會讓 App 啟動就跳出對話框。
   const pager = usePhotoPager(granted);
-  const session = useCleanupSession(pager.photos, granted);
+  const session = useCleanupSession(pager.photos, granted, pager.totalCount);
 
   return (
     <CleanupContext.Provider value={{ access, granted, pager, session }}>

@@ -52,6 +52,8 @@ export type DiscardedResolution = {
   blocked: boolean;
   /** 重新查詢所有目前標為無法取得的 ID。 */
   retryUnavailable: () => void;
+  /** 照片已被系統刪除後，把 ID 從解析快取移除。 */
+  dropFromCache: (ids: string[]) => void;
 };
 
 /**
@@ -206,6 +208,27 @@ export function useDiscardedResolver({
     setBlocked(false);
   }, []);
 
+  const dropFromCache = useCallback((ids: string[]) => {
+    if (ids.length === 0) {
+      return;
+    }
+    const drop = new Set(ids);
+    setExtra((current) => {
+      const next = new Map(current);
+      for (const id of drop) {
+        next.delete(id);
+      }
+      return next;
+    });
+    setUnavailable((current) => {
+      const next = new Set(current);
+      for (const id of drop) {
+        next.delete(id);
+      }
+      return next;
+    });
+  }, []);
+
   const resolution = useMemo(() => {
     const resolved: RecentPhoto[] = [];
     const pendingIds: string[] = [];
@@ -225,5 +248,5 @@ export function useDiscardedResolver({
     return { resolved, pendingIds, unavailableIds };
   }, [discardedIds, loadedById, extra, unavailable]);
 
-  return { ...resolution, resolving, blocked, retryUnavailable };
+  return { ...resolution, resolving, blocked, retryUnavailable, dropFromCache };
 }

@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -20,6 +20,7 @@ import { CheckIcon } from '@/components/icons';
 import { AppButton, Body, Caption, Notice, Screen, StatChip } from '@/components/ui';
 import { useCleanup } from '@/hooks/use-cleanup';
 import { useDiscardedResolver } from '@/hooks/use-discarded-resolver';
+import { MAX_TEST_DELETE_COUNT, deletePhotoAssetsAsync } from '@/lib/delete-service';
 import { formatPhotoDate } from '@/lib/photos';
 import { colors, radius, scaleFont, spacing } from '@/lib/theme';
 
@@ -32,6 +33,10 @@ export default function ReviewScreen() {
   const { granted, pager, session } = useCleanup();
 
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteMessage, setDeleteMessage] = useState<string | null>(null);
+  // 立即生效的重複點擊防護（setState 是非同步的，來不及擋連點）。
+  const deletingRef = useRef(false);
 
   /**
    * 先用 pager 已載入的照片對照，剩下的才按 ID 逐筆查詢。
@@ -49,8 +54,22 @@ export default function ReviewScreen() {
   const pendingCount = resolution.pendingIds.length;
   const unavailableCount = resolution.unavailableIds.length;
 
-  /** 未來的真正刪除按鈕只能在這個條件成立時啟用。 */
-  const readyForDeletion = pendingCount === 0 && unavailableCount === 0 && resolvedCount > 0;
+  /** 全部解析完成、沒有待處理項目，才允許進入刪除。 */
+  const readyForDeletion =
+    resolvedCount > 0 &&
+    pendingCount === 0 &&
+    unavailableCount === 0 &&
+    !resolution.resolving &&
+    !deleting;
+
+  /** Phase 4A 安全上限：超過就停用按鈕。 */
+  const overTestLimit = resolvedCount > MAX_TEST_DELETE_COUNT;
+  const canDelete = readyForDeletion && !overTestLimit;
+
+  /** 待刪除已清空且真的刪過照片 → 顯示成功摘要，並收掉刪除區塊。 */
+  const showSuccessSummary = session.discardedCount === 0 && session.deletedCount > 0;
+  /** 沒有待刪除項目時就不要顯示「刪除 0 張測試照片」。 */
+  const showDeleteZone = session.discardedCount > 0;
 
   // 開發期自檢：待刪除總數必須永遠等於三種狀態之和。
   useEffect(() => {
@@ -109,6 +128,52 @@ export default function ReviewScreen() {
     );
   };
 
+  const runDelete = async (ids: string[]) => {
+    if (deletingRef.current) {
+      return;
+    }
+    deletingRef.current = true;
+    setDeleting(true);
+    setDeleteMessage(null);
+
+    try {
+      const outcome = await deletePhotoAssetsAsync(ids);
+
+      if (outcome.status === 'deleted') {
+        // 只移除確定刪掉的 id；keptIds 與其他未處理進度完全不動。
+        session.removeDeleted(outcome.ids);
+        resolution.dropFromCache(outcome.ids);
+        pager.reload();
+        setDeleteMessage(`已刪除 ${outcome.ids.length} 張照片`);
+        Alert.alert('已完成刪除', `已刪除 ${outcome.ids.length} 張照片`);
+      } else if (outcome.status === 'cancelled') {
+        // 不動 discardedIds、不動 history。
+        setDeleteMessage('你已取消刪除，照片沒有變更');
+      } else {
+        setDeleteMessage(outcome.message);
+      }
+    } finally {
+      deletingRef.current = false;
+      setDeleting(false);
+    }
+  };
+
+  const handleRequestDelete = () => {
+    if (!canDelete) {
+      return;
+    }
+    // 只把「可檢視」的 id 送進刪除服務。
+    const ids = resolution.resolved.map((photo) => photo.id);
+    Alert.alert(
+      '確認刪除測試照片',
+      `將刪除 ${ids.length} 張照片。\n\n請只使用可刪除的測試照片。接下來 iPhone 會再次要求確認。`,
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '繼續刪除', style: 'destructive', onPress: () => void runDelete(ids) },
+      ]
+    );
+  };
+
   const handleSaveAndGoHome = async () => {
     // 本輪只保存結果，不刪除任何照片。
     await session.saveNow();
@@ -119,10 +184,11 @@ export default function ReviewScreen() {
     <Screen style={styles.screen}>
       <View style={styles.header}>
         <Text style={[styles.heading, { fontSize: scaleFont(21, width) }]}>本次整理結果</Text>
-        <Caption>{`本次已整理 ${session.decidedCount} 張`}</Caption>
+        <Caption>{`本次已處理 ${session.processedCount} 張`}</Caption>
         <View style={styles.stats}>
-          <StatChip label="保留" value={session.keptCount} tone="keep" />
+          <StatChip label="已保留" value={session.keptCount} tone="keep" />
           <StatChip label="待刪除" value={session.discardedCount} tone="discard" />
+          <StatChip label="已刪除" value={session.deletedCount} tone="neutral" />
         </View>
         {session.discardedCount > 0 ? (
           <View style={styles.stats}>
@@ -138,6 +204,19 @@ export default function ReviewScreen() {
           <Notice tone="warning" title="尚未取得相簿權限">
             請先回到權限頁允許存取相簿。
           </Notice>
+        ) : showSuccessSummary ? (
+          <View style={styles.emptyWrap}>
+            <View style={[styles.empty, styles.successCard]}>
+              <CheckIcon size={34} color={colors.keep} />
+              <Text style={[styles.successTitle, { fontSize: scaleFont(19, width) }]}>
+                {`已成功刪除 ${session.deletedCount} 張照片`}
+              </Text>
+              <Body muted>
+                {`本次已處理 ${session.processedCount} 張：已保留 ${session.keptCount} 張、待刪除 ${session.discardedCount} 張、已刪除 ${session.deletedCount} 張。`}
+              </Body>
+              <Caption>照片已移到 iPhone「照片」App 的「最近刪除」，可在那裡復原。</Caption>
+            </View>
+          </View>
         ) : session.discardedCount === 0 ? (
           <View style={styles.emptyWrap}>
             <View style={styles.empty}>
@@ -232,13 +311,66 @@ export default function ReviewScreen() {
       </View>
 
       <View style={styles.footer}>
-        <View style={styles.safeBanner}>
-          <Text style={[styles.safeBannerText, { fontSize: scaleFont(13, width) }]}>
-            安全測試模式：目前不會刪除照片
-          </Text>
-        </View>
-        <AppButton label="儲存進度並返回首頁" onPress={() => void handleSaveAndGoHome()} />
-        <AppButton label="返回繼續整理" variant="secondary" onPress={() => router.back()} />
+        {showDeleteZone ? (
+          <View style={styles.dangerZone}>
+            <Text style={[styles.dangerTitle, { fontSize: scaleFont(12, width) }]}>
+              {`Phase 4A 安全測試：一次最多刪除 ${MAX_TEST_DELETE_COUNT} 張，且需經 iPhone 系統確認`}
+            </Text>
+
+            {deleting ? (
+              <View style={styles.statusRow}>
+                <ActivityIndicator size="small" />
+                <Caption>正在刪除，請在 iPhone 的系統視窗確認…</Caption>
+              </View>
+            ) : deleteMessage ? (
+              <Caption>{deleteMessage}</Caption>
+            ) : overTestLimit ? (
+              <Text style={[styles.dangerHint, { fontSize: scaleFont(12, width) }]}>
+                {`安全測試階段一次最多刪除 ${MAX_TEST_DELETE_COUNT} 張`}
+              </Text>
+            ) : !readyForDeletion ? (
+              <Caption>需先完成解析並處理無法取得的項目，才能刪除。</Caption>
+            ) : null}
+
+            <AppButton
+              label={
+                deleting
+                  ? '正在刪除…'
+                  : resolvedCount > 0
+                    ? `刪除 ${resolvedCount} 張測試照片`
+                    : '尚無可刪除的照片'
+              }
+              variant="danger"
+              disabled={!canDelete}
+              onPress={handleRequestDelete}
+            />
+          </View>
+        ) : null}
+
+        {showSuccessSummary ? (
+          <>
+            <AppButton label="繼續整理" onPress={() => router.back()} />
+            <AppButton
+              label="返回首頁"
+              variant="secondary"
+              onPress={() => void handleSaveAndGoHome()}
+            />
+          </>
+        ) : (
+          <>
+            <AppButton
+              label="儲存進度並返回首頁"
+              disabled={deleting}
+              onPress={() => void handleSaveAndGoHome()}
+            />
+            <AppButton
+              label="返回繼續整理"
+              variant="secondary"
+              disabled={deleting}
+              onPress={() => router.back()}
+            />
+          </>
+        )}
       </View>
 
       <Modal
@@ -370,22 +502,34 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontWeight: '700',
   },
+  successCard: {
+    borderColor: colors.keep,
+    borderWidth: StyleSheet.hairlineWidth * 3,
+  },
+  successTitle: {
+    color: colors.keep,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
   footer: {
     gap: spacing.sm,
   },
-  safeBanner: {
-    alignItems: 'center',
+  dangerZone: {
     backgroundColor: colors.surfaceAlt,
-    borderColor: colors.keep,
+    borderColor: colors.discard,
     borderRadius: radius.sm,
     borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
+    gap: spacing.sm,
+    padding: spacing.sm,
   },
-  safeBannerText: {
-    color: colors.keep,
+  dangerTitle: {
+    color: colors.discard,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  dangerHint: {
+    color: colors.warning,
+    fontWeight: '600',
   },
   modal: {
     backgroundColor: colors.background,

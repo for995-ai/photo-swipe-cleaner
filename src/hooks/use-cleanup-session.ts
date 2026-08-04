@@ -4,12 +4,14 @@ import type { RecentPhoto } from '@/lib/photos';
 import {
   EMPTY_SESSION,
   applyDecision,
+  bumpSessionTotalEstimate,
   clearStoredSessionAsync,
   convertToKeep,
-  countDecided,
+  countProcessed,
   findCursorIndex,
   forgetIds,
   loadStoredSessionAsync,
+  removeDeletedIds,
   saveSessionAsync,
   undoLastDecision,
   type Decision,
@@ -24,7 +26,12 @@ export type CleanupSession = {
   cursorIndex: number;
   keptCount: number;
   discardedCount: number;
-  decidedCount: number;
+  /** 已被系統實際刪除的張數。 */
+  deletedCount: number;
+  /** 本次已處理 = 已保留 + 待刪除 + 已刪除。 */
+  processedCount: number;
+  /** 進度分母：本次整理的總數估計值，只增不減。 */
+  sessionTotalEstimate: number;
   canUndo: boolean;
   /** 滑動與底部按鈕共用的唯一決策入口。 */
   decide: (photoId: string, decision: Decision) => void;
@@ -33,6 +40,8 @@ export type CleanupSession = {
   keepInstead: (photoId: string) => void;
   /** 由使用者主動處理「已確認無法取得」的 id；不可用於尚在解析中的 id。 */
   forget: (photoIds: string[]) => void;
+  /** 照片已被系統實際刪除後，把 id 從待刪除清單與歷史移除；keptIds 不動。 */
+  removeDeleted: (photoIds: string[]) => void;
   reset: () => void;
   /** 立即把目前進度寫入本機（用於「完成本次整理」）。 */
   saveNow: () => Promise<void>;
@@ -45,7 +54,12 @@ export type CleanupSession = {
  * 完全不依賴 photos，所以分頁追加新照片不可能重設
  * cursorIndex／keptIds／discardedIds／history。
  */
-export function useCleanupSession(photos: RecentPhoto[], enabled: boolean): CleanupSession {
+export function useCleanupSession(
+  photos: RecentPhoto[],
+  enabled: boolean,
+  /** 相簿目前回報的照片總數；只用來把分母往上推，不會讓它變小。 */
+  libraryTotal: number
+): CleanupSession {
   const [state, setState] = useState<SessionState>(EMPTY_SESSION);
   const [ready, setReady] = useState(false);
 
@@ -70,6 +84,15 @@ export function useCleanupSession(photos: RecentPhoto[], enabled: boolean): Clea
       cancelled = true;
     };
   }, [enabled]);
+
+  // 分母只增不減。bumpSessionTotalEstimate 沒有變化時會回傳同一個物件，
+  // setState 直接 bail out，所以把 state 放進依賴也不會無限循環。
+  useEffect(() => {
+    if (!ready) {
+      return;
+    }
+    setState((current) => bumpSessionTotalEstimate(current, libraryTotal));
+  }, [ready, libraryTotal, state]);
 
   useEffect(() => {
     if (!ready) {
@@ -97,6 +120,10 @@ export function useCleanupSession(photos: RecentPhoto[], enabled: boolean): Clea
     setState((current) => forgetIds(current, photoIds));
   }, []);
 
+  const removeDeleted = useCallback((photoIds: string[]) => {
+    setState((current) => removeDeletedIds(current, photoIds));
+  }, []);
+
   // 清空進度即等於重新開始；不重新讀取儲存，避免清除與還原互相搶。
   const reset = useCallback(() => {
     setState(EMPTY_SESSION);
@@ -113,12 +140,15 @@ export function useCleanupSession(photos: RecentPhoto[], enabled: boolean): Clea
     cursorIndex,
     keptCount: state.keptIds.length,
     discardedCount: state.discardedIds.length,
-    decidedCount: countDecided(state),
+    deletedCount: state.deletedIds.length,
+    processedCount: countProcessed(state),
+    sessionTotalEstimate: state.sessionTotalEstimate,
     canUndo: state.history.length > 0,
     decide,
     undo,
     keepInstead,
     forget,
+    removeDeleted,
     reset,
     saveNow,
   };

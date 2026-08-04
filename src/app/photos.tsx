@@ -89,30 +89,29 @@ export default function PhotosScreen() {
   };
 
   const handleReset = () => {
+    // 只清整理紀錄。已刪除的照片留在 iPhone「最近刪除」，本 App 不會、也不能復原它們。
     Alert.alert(
-      '重置本次進度？',
-      '會清除目前的保留與待刪除紀錄，從第 1 張重新開始。你的照片本身不會有任何變動。',
+      '重置本次整理紀錄？',
+      '這會清除保留、待刪除與已刪除的統計紀錄，但不會復原已移至 iPhone「最近刪除」的照片。如需復原，請前往 iPhone「照片」App 的「最近刪除」。',
       [
         { text: '取消', style: 'cancel' },
-        { text: '重置', style: 'destructive', onPress: () => session.reset() },
+        { text: '清除整理紀錄', style: 'destructive', onPress: () => session.reset() },
       ]
     );
   };
 
   const restoring = granted && !session.ready;
-  const totalLabel = pager.totalCount > 0 ? `約 ${pager.totalCount}` : `${loaded}`;
+  // 分母改用單調遞增的估計值：刪除照片後不會掉下來，已處理數也不會超過總數。
+  const totalEstimate = Math.max(session.sessionTotalEstimate, session.processedCount, loaded);
 
   return (
     <Screen style={styles.screen}>
       <View style={styles.header}>
         <View style={styles.headerRow}>
           <Text style={[styles.heading, { fontSize: scaleFont(19, width) }]}>照片整理</Text>
-          <Caption>{`已整理 ${session.decidedCount} / ${totalLabel} 張`}</Caption>
+          <Caption>{`已處理 ${session.processedCount} / 約 ${totalEstimate} 張`}</Caption>
         </View>
-        <ProgressBar
-          value={session.decidedCount}
-          total={pager.totalCount > 0 ? pager.totalCount : loaded}
-        />
+        <ProgressBar value={session.processedCount} total={totalEstimate} />
         <View style={styles.headerRow}>
           <View style={styles.stats}>
             <StatChip label="保留" value={session.keptCount} tone="keep" />
@@ -227,8 +226,8 @@ export default function PhotosScreen() {
         </View>
 
         <View style={styles.safeBanner}>
-          <Text style={[styles.safeBannerText, { fontSize: scaleFont(13, width) }]}>
-            安全測試模式：目前不會刪除照片
+          <Text style={[styles.safeBannerText, { fontSize: scaleFont(12, width) }]}>
+            滑動只會標記；需在確認頁並經 iPhone 系統確認後才會刪除
           </Text>
         </View>
 

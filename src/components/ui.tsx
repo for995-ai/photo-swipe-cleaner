@@ -124,7 +124,7 @@ export function AppButton({
 }: {
   label: string;
   onPress: () => void;
-  variant?: 'primary' | 'secondary' | 'ghost';
+  variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   disabled?: boolean;
 }) {
   const { width } = useWindowDimensions();
@@ -148,6 +148,7 @@ export function AppButton({
         variant === 'primary' && styles.buttonPrimary,
         variant === 'secondary' && styles.buttonSecondary,
         variant === 'ghost' && styles.buttonGhost,
+        variant === 'danger' && styles.buttonDanger,
         pressed && !disabled && styles.buttonPressed,
         disabled && styles.buttonDisabled,
       ]}>
@@ -157,6 +158,7 @@ export function AppButton({
           // ghost 用小一號字＋窄一點的內距，並排時才不會被截成「重新開始本次…」
           { fontSize: scaleFont(variant === 'ghost' ? 14 : 16, width) },
           variant === 'primary' && styles.buttonLabelPrimary,
+          variant === 'danger' && styles.buttonLabelPrimary,
           variant === 'ghost' && styles.buttonLabelGhost,
           disabled && styles.buttonLabelDisabled,
         ]}
@@ -304,6 +306,9 @@ const styles = StyleSheet.create({
   buttonGhost: {
     minHeight: 44,
     paddingHorizontal: spacing.sm,
+  },
+  buttonDanger: {
+    backgroundColor: colors.discard,
   },
   buttonPressed: {
     opacity: 0.75,
