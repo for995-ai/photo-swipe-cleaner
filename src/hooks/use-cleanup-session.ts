@@ -37,6 +37,9 @@ export type CommitDeletedBatchResult =
 /** 傳進來的 ID 全部不可用時的訊息。這種情況不會動到任何 state。 */
 const COMMIT_INVALID_IDS_MESSAGE = '沒有可提交的照片 ID，進度沒有變更。';
 
+/** expectedScopeKey 與目前 state 歸屬不符時的訊息。 */
+const COMMIT_SCOPE_MISMATCH_MESSAGE = '整理範圍已變更，無法更新這批刪除進度。';
+
 /** 還沒還原任何整理範圍就要求保存時的訊息。 */
 const SESSION_NOT_READY_MESSAGE = '進度尚未載入完成，請稍後再試一次。';
 
@@ -107,10 +110,34 @@ export type CleanupSession = {
   /** 手動清掉保存錯誤提示。 */
   clearSaveError: () => void;
   /**
+   * 記憶體中最新的 state 快照。
+   *
+   * 分批刪除的執行器在**每一批開始前**都要重新確認 discardedIds，而那時
+   * React 可能還沒 render（上一批的 commit 剛結束）。閉包裡的 `state` 在
+   * 那個瞬間是舊的，所以必須有一個直接讀 ref 的入口。
+   *
+   * 回傳的是內部物件本身（`Readonly` 只是型別層的提醒）：**呼叫端不得修改它**。
+   */
+  getStateSnapshot: () => Readonly<SessionState>;
+  /**
+   * 目前記憶體 state 實際歸屬的 scope key；尚未還原任何範圍時為 null。
+   *
+   * 與畫面上的 activeScopeKey 不同：切換範圍後、載入完成前，這裡仍是舊的 key。
+   * 分批刪除必須用這個值判斷「Session 是不是真的已經對齊我要刪的範圍」。
+   */
+  getScopeKeySnapshot: () => string | null;
+  /**
    * 提交一批「已經被 iPhone 刪除」的照片：更新記憶體 state 並立即嘗試持久化。
    * 保存失敗時**不會回滾** state —— 照片真的已經不見了。
+   *
+   * `expectedScopeKey` 是可選的防護：有給就必須與目前 state 的歸屬相符，
+   * 否則完全不動任何東西並回報失敗。分批刪除與恢復流程都會帶上它，
+   * 避免在使用者切換範圍後把上一個範圍的結果寫進新範圍。
    */
-  commitDeletedBatch: (ids: readonly string[]) => Promise<CommitDeletedBatchResult>;
+  commitDeletedBatch: (
+    ids: readonly string[],
+    expectedScopeKey?: string
+  ) => Promise<CommitDeletedBatchResult>;
 };
 
 /**
@@ -366,8 +393,18 @@ export function useCleanupSession(
     setLastSaveError(null);
   }, []);
 
+  const getStateSnapshot = useCallback((): Readonly<SessionState> => stateRef.current, []);
+
+  const getScopeKeySnapshot = useCallback(
+    (): string | null => stateOwnerRef.current?.key ?? null,
+    []
+  );
+
   const commitDeletedBatch = useCallback(
-    async (ids: readonly string[]): Promise<CommitDeletedBatchResult> => {
+    async (
+      ids: readonly string[],
+      expectedScopeKey?: string
+    ): Promise<CommitDeletedBatchResult> => {
       const uniqueIds = sanitizeCommitIds(ids);
       if (!uniqueIds) {
         // 沒有合法 ID：完全不動 state，也不排任何保存。
@@ -375,6 +412,12 @@ export function useCleanupSession(
       }
 
       const owner = stateOwnerRef.current;
+
+      // 範圍防護要在**修改 state 之前**檢查：一旦寫下去就沒有安全的回滾方式。
+      // 沒帶 expectedScopeKey 的舊呼叫端行為完全不變。
+      if (expectedScopeKey !== undefined && owner?.key !== expectedScopeKey) {
+        return { ok: false, committedIds: [], message: COMMIT_SCOPE_MISMATCH_MESSAGE };
+      }
       // 沿用既有的 removeDeletedIds 語意：discardedIds 與 history 移除、
       // deletedIds 以 Set 去重併入、keptIds 完全不動。
       const nextState = removeDeletedIds(stateRef.current, uniqueIds);
@@ -420,6 +463,8 @@ export function useCleanupSession(
     saveNow,
     retrySaveCurrentState,
     clearSaveError,
+    getStateSnapshot,
+    getScopeKeySnapshot,
     commitDeletedBatch,
   };
 }
