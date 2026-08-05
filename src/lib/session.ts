@@ -34,6 +34,29 @@ function storageKeyFor(scopeKeyValue: string): string {
   return `${STORAGE_KEY_PREFIX}${scopeKeyValue}`;
 }
 
+/**
+ * 保存結果。
+ *
+ * 改成回傳結果而不是靜默吞掉錯誤，是因為分批刪除必須知道「這一批的進度
+ * 有沒有真的落地」：沒落地就要停下後續批次，否則 App 重開後會對已經刪掉的
+ * 照片再刪一次。
+ */
+export type SessionSaveResult =
+  | { ok: true }
+  | {
+      ok: false;
+      /** 可以直接顯示給使用者的安全訊息。 */
+      message: string;
+      /** 原始錯誤，只給 __DEV__ 記錄或除錯用，不要直接呈現在 UI。 */
+      cause?: unknown;
+    };
+
+/**
+ * 保存失敗時給使用者看的訊息。
+ * 刻意不含任何內部細節（storage key、例外內容、堆疊）——那些留在 cause 裡。
+ */
+export const SESSION_SAVE_FAILED_MESSAGE = '無法儲存目前進度，請保持 App 開啟並再試一次。';
+
 export type Decision = 'keep' | 'discard';
 
 export type HistoryEntry = {
@@ -322,25 +345,35 @@ export async function loadStoredSessionAsync(scopeKeyValue: string): Promise<Ses
   }
 }
 
+/**
+ * 把進度寫入本機。
+ *
+ * schema、storage key 與 payload 內容完全沒變（仍是 v5），唯一的差別是
+ * 現在會回報成功或失敗。本函式保證**不會 reject**，所以既有那些
+ * `void saveSessionAsync(...)` 的呼叫端不需要任何修改，也不會產生
+ * unhandled rejection。
+ */
 export async function saveSessionAsync(
   state: SessionState,
   scopeKeyValue: string,
   scope: CleanupScope
-): Promise<void> {
-  const payload: StoredSession = {
-    version: STORAGE_VERSION,
-    scope,
-    keptIds: state.keptIds,
-    discardedIds: state.discardedIds,
-    deletedIds: state.deletedIds,
-    sessionTotalEstimate: state.sessionTotalEstimate,
-    history: state.history,
-    updatedAt: Date.now(),
-  };
+): Promise<SessionSaveResult> {
   try {
+    const payload: StoredSession = {
+      version: STORAGE_VERSION,
+      scope,
+      keptIds: state.keptIds,
+      discardedIds: state.discardedIds,
+      deletedIds: state.deletedIds,
+      sessionTotalEstimate: state.sessionTotalEstimate,
+      history: state.history,
+      updatedAt: Date.now(),
+    };
     await AsyncStorage.setItem(storageKeyFor(scopeKeyValue), JSON.stringify(payload));
-  } catch {
-    // 保存失敗不影響當次操作。
+    return { ok: true };
+  } catch (cause) {
+    // JSON.stringify 與 setItem 都包在同一個 try 內：兩者都不該讓呼叫端收到例外。
+    return { ok: false, message: SESSION_SAVE_FAILED_MESSAGE, cause };
   }
 }
 
