@@ -121,7 +121,22 @@ export type DeleteJournalWriteResult =
 export type DeleteJournalLoadResult =
   | { status: 'none' }
   | { status: 'loaded'; entry: DeleteJournalEntryV1 }
-  | { status: 'corrupt'; message: string; cause?: unknown }
+  | {
+      status: 'corrupt';
+      message: string;
+      /**
+       * AsyncStorage 這一次實際讀到的原始字串。
+       *
+       * 存在的唯一理由是「精確清除」：使用者確認要丟掉損壞紀錄時，必須能證明
+       * 要刪的就是他當時看到的那一筆。只憑 key 就 removeItem 有可能刪掉在這
+       * 期間才寫進去的、完全不同的紀錄。
+       *
+       * 這是內部資料，**不得**放進任何使用者可見的訊息或公開狀態。
+       * `failed` 沒有這個欄位——那種情況我們根本沒讀到內容。
+       */
+      rawValue: string;
+      cause?: unknown;
+    }
   | { status: 'failed'; message: string; cause?: unknown };
 
 export type DeleteJournalClearResult =
@@ -438,16 +453,22 @@ export async function loadDeleteJournalAsync(
     return { status: 'none' };
   }
 
+  // 以下三種 corrupt 都要帶上「這一次讀到的」原始字串，之後才能精確清除。
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (cause) {
-    return { status: 'corrupt', message: DELETE_JOURNAL_CORRUPT_MESSAGE, cause };
+    return { status: 'corrupt', message: DELETE_JOURNAL_CORRUPT_MESSAGE, rawValue: raw, cause };
   }
 
   const validation = validateDeleteJournalEntry(parsed);
   if (!validation.valid) {
-    return { status: 'corrupt', message: DELETE_JOURNAL_CORRUPT_MESSAGE, cause: validation.message };
+    return {
+      status: 'corrupt',
+      message: DELETE_JOURNAL_CORRUPT_MESSAGE,
+      rawValue: raw,
+      cause: validation.message,
+    };
   }
 
   // 紀錄裡的 scopeKey 必須與讀取用的 key 相符。
@@ -456,6 +477,7 @@ export async function loadDeleteJournalAsync(
     return {
       status: 'corrupt',
       message: DELETE_JOURNAL_CORRUPT_MESSAGE,
+      rawValue: raw,
       cause: `scopeKey 不一致：紀錄內為 ${validation.entry.scopeKey}`,
     };
   }
@@ -521,5 +543,86 @@ export async function clearDeleteJournalAsync(
       message: DELETE_JOURNAL_CLEAR_FAILED_MESSAGE,
       cause,
     };
+  }
+}
+
+/**
+ * 清除**損壞**的紀錄，但只在它與使用者當時看到的那一筆完全相同時才動手。
+ *
+ * `clearDeleteJournalAsync` 刻意拒絕清除 corrupt 資料（它可能是唯一的線索），
+ * 所以損壞的紀錄本來沒有出口，該範圍會永遠卡住。這個函式是那個出口，
+ * 但它必須嚴格到不可能誤刪：
+ *
+ * - 重新讀一次，**不信任**呼叫端先前拿到的內容
+ * - 目前內容與 `expectedRawValue` 不是同一個字串就不動手
+ * - 目前內容已經變成**有效**紀錄就不動手（有人在這期間寫了新的一筆）
+ * - 只有「一字不差且仍然損壞」才 removeItem
+ *
+ * 換句話說：「某個 key 曾經 corrupt」永遠不足以構成刪除理由。
+ * 保證不 reject，也不使用任何 fallback key。
+ */
+export async function clearCorruptDeleteJournalAsync(
+  scopeKey: string,
+  expectedRawValue: string
+): Promise<DeleteJournalClearResult> {
+  let key: string;
+  try {
+    key = getDeleteJournalStorageKey(scopeKey);
+  } catch (cause) {
+    return { ok: false, cleared: false, message: DELETE_JOURNAL_CLEAR_FAILED_MESSAGE, cause };
+  }
+
+  if (typeof expectedRawValue !== 'string') {
+    return {
+      ok: false,
+      cleared: false,
+      message: DELETE_JOURNAL_CLEAR_FAILED_MESSAGE,
+      cause: 'expectedRawValue 必須是字串',
+    };
+  }
+
+  let current: string | null;
+  try {
+    current = await AsyncStorage.getItem(key);
+  } catch (cause) {
+    return { ok: false, cleared: false, message: DELETE_JOURNAL_CLEAR_FAILED_MESSAGE, cause };
+  }
+
+  if (current === null || current === undefined) {
+    // 已經沒有東西了。沒清到不是錯誤。
+    return { ok: true, cleared: false };
+  }
+
+  if (current !== expectedRawValue) {
+    // 內容在使用者確認期間被換掉了：不確定他同意的是不是這一筆，一律不動。
+    return { ok: true, cleared: false };
+  }
+
+  // 再驗一次：萬一同樣的字串其實是有效紀錄（例如先前的判斷邏輯有變），
+  // 那就不該被當成損壞資料刪掉。
+  let parsed: unknown;
+  let stillCorrupt = false;
+  try {
+    parsed = JSON.parse(current);
+  } catch {
+    stillCorrupt = true;
+  }
+  if (!stillCorrupt) {
+    const validation = validateDeleteJournalEntry(parsed);
+    if (validation.valid && validation.entry.scopeKey === scopeKey) {
+      return {
+        ok: false,
+        cleared: false,
+        message: '安全紀錄已經變更，未清除任何資料。',
+        cause: 'raw value 已可解析成有效紀錄',
+      };
+    }
+  }
+
+  try {
+    await AsyncStorage.removeItem(key);
+    return { ok: true, cleared: true };
+  } catch (cause) {
+    return { ok: false, cleared: false, message: DELETE_JOURNAL_CLEAR_FAILED_MESSAGE, cause };
   }
 }
