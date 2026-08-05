@@ -1,11 +1,11 @@
 /**
- * 把安全分批刪除核心接上真實服務的薄型 Hook。
+ * 把單次刪除交易核心接上真實服務的薄型 Hook。
  *
  * 這裡刻意「薄」：所有安全判斷都留在已經逐一驗證過的純模組裡
- * （delete-batches／delete-journal／delete-runner），本檔只負責三件事：
+ * （delete-journal／delete-runner），本檔只負責三件事：
  *
- * 1. 把真實服務注入 runDeleteBatches（Journal 存取、PhotoKit 刪除、Session 提交）
- * 2. 用 AppState 決定「現在能不能開始下一批」
+ * 1. 把真實服務注入 runDeleteTransaction（Journal 存取、PhotoKit 刪除、Session 提交）
+ * 2. 用 AppState 確認「交易開始前」App 在前景——開始後就不再檢查
  * 3. 啟動時檢查安全紀錄，並且**只**自動恢復 photo-deleted 這一種
  *
  * 本檔不認識 UI，也不接受 router 或 component；scope 與 session 都由呼叫端傳入。
@@ -15,7 +15,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
-import { planDeleteBatches } from '@/lib/delete-batches';
 import {
   clearCorruptDeleteJournalAsync,
   clearDeleteJournalAsync,
@@ -23,13 +22,17 @@ import {
   saveDeleteJournalAsync,
   type DeleteJournalEntryV1,
 } from '@/lib/delete-journal';
-import { runDeleteBatches, type DeleteRunnerProgressEvent, type DeleteRunnerResult } from '@/lib/delete-runner';
-import { MAX_DELETE_COUNT_PER_BATCH, deletePhotoAssetsAsync } from '@/lib/delete-service';
+import {
+  runDeleteTransaction,
+  type DeleteTransactionProgressEvent,
+  type DeleteTransactionResult,
+} from '@/lib/delete-runner';
+import { deletePhotoAssetsAsync } from '@/lib/delete-service';
 import type { CommitDeletedBatchResult } from '@/hooks/use-cleanup-session';
 import type { SessionState } from '@/lib/session';
 
 /** Hook 只需要 Session 的這三個能力，不必依賴整個 useCleanupSession。 */
-export type BatchDeletionSessionPort = {
+export type PhotoDeletionSessionPort = {
   commitDeletedBatch: (
     ids: readonly string[],
     expectedScopeKey?: string
@@ -38,20 +41,20 @@ export type BatchDeletionSessionPort = {
   getScopeKeySnapshot: () => string | null;
 };
 
-export type UseBatchDeletionParams = {
+export type UsePhotoDeletionParams = {
   scopeKey: string;
   sessionReady: boolean;
-  session: BatchDeletionSessionPort;
+  session: PhotoDeletionSessionPort;
 };
 
-export type BatchDeletionHookStatus =
+export type PhotoDeletionStatus =
   /** Session 還沒還原完成，什麼都不能做。 */
   | 'waiting-for-session'
   /** 正在讀取／恢復安全紀錄。 */
   | 'checking-recovery'
   /** 沒有殘留紀錄，可以開始刪除。 */
   | 'ready'
-  /** 正在跑一趟分批刪除。 */
+  /** 正在執行一次刪除交易。 */
   | 'running'
   /** 上一趟完整跑完。 */
   | 'completed'
@@ -75,9 +78,9 @@ export type BatchDeletionHookStatus =
  * 因為只有他能打開 iPhone「照片」App 去看。
  */
 export type ManualRecoveryAction =
-  /** 使用者確認照片仍在 → 上一批沒刪成功，只要清掉紀錄。 */
+  /** 使用者確認照片仍在 → 上一次沒刪成功，只要清掉紀錄。 */
   | 'confirmed-still-present'
-  /** 使用者確認照片已刪 → 要把這批補記進 Session，再清紀錄。 */
+  /** 使用者確認照片已刪 → 要把這些照片補記進 Session，再清紀錄。 */
   | 'confirmed-deleted'
   /** 使用者同意丟棄損壞的紀錄。 */
   | 'cleared-corrupt';
@@ -89,7 +92,7 @@ export type ManualRecoveryResult =
 export type DeleteRecoveryState =
   | { kind: 'idle' }
   | { kind: 'checking'; scopeKey: string }
-  /** 正在把 photo-deleted 的批次補提交進 Session。 */
+  /** 正在把 photo-deleted 的照片補提交進 Session。 */
   | { kind: 'recovering-photo-deleted'; scopeKey: string; entry: DeleteJournalEntryV1 }
   /** 正在執行使用者發起的人工解除。 */
   | {
@@ -112,21 +115,21 @@ export type DeleteRecoveryState =
     }
   | { kind: 'storage-failed'; scopeKey: string; message: string };
 
-export type UseBatchDeletionResult = {
-  status: BatchDeletionHookStatus;
+export type UsePhotoDeletionResult = {
+  status: PhotoDeletionStatus;
   recovery: DeleteRecoveryState;
-  progress: DeleteRunnerProgressEvent | null;
-  result: DeleteRunnerResult | null;
+  progress: DeleteTransactionProgressEvent | null;
+  result: DeleteTransactionResult | null;
   isRunning: boolean;
   isRecovering: boolean;
   /** 為 true 時 UI 應該擋住整理範圍切換。 */
   isScopeLocked: boolean;
   canStart: boolean;
-  startDeleteRun: (ids: readonly string[]) => Promise<DeleteRunnerResult | null>;
+  startDeleteRun: (ids: readonly string[]) => Promise<DeleteTransactionResult | null>;
   retryRecovery: () => void;
   resetRunResult: () => void;
   /**
-   * 使用者已確認「本批照片仍存在」，因此上一批並未成功刪除。
+   * 使用者已確認「這些照片仍存在」，因此上一次並未成功刪除。
    *
    * - 本函式**不會**顯示任何確認視窗；呼叫端必須先取得使用者明確確認。
    * - 本函式**絕不**呼叫 PhotoKit。
@@ -134,11 +137,11 @@ export type UseBatchDeletionResult = {
    */
   confirmPhotosStillPresent: () => Promise<ManualRecoveryResult>;
   /**
-   * 使用者已確認「本批照片已經刪除」。
+   * 使用者已確認「這些照片已經刪除」。
    *
    * - 本函式**不會**顯示任何確認視窗；呼叫端必須先取得使用者明確確認。
    * - 本函式**絕不**呼叫 PhotoKit —— 照片是使用者自己看過確認的。
-   * - 把紀錄裡的 batchIds 補進 Session，成功後才清除紀錄。
+   * - 把紀錄裡的照片清單補進 Session，成功後才清除紀錄。
    */
   confirmPhotosDeleted: () => Promise<ManualRecoveryResult>;
   /**
@@ -151,8 +154,8 @@ export type UseBatchDeletionResult = {
   confirmClearCorruptJournal: () => Promise<ManualRecoveryResult>;
 };
 
-const MESSAGE_BLOCKED_PREPARED = '上一批刪除結果仍待確認，請返回確認頁重新檢查照片。';
-const MESSAGE_BLOCKED_UNCERTAIN = '上一批刪除結果無法確認，請重新檢查待刪照片。';
+const MESSAGE_BLOCKED_PREPARED = '上一次刪除結果仍待確認，請返回確認頁重新檢查照片。';
+const MESSAGE_BLOCKED_UNCERTAIN = '上一次刪除結果無法確認，請重新檢查待刪照片。';
 const MESSAGE_BLOCKED_CORRUPT = '刪除安全紀錄無法讀取，請先確認照片狀態。';
 const MESSAGE_RECOVERY_CLEAR_PENDING = '照片刪除進度已更新，但安全紀錄尚未清除，請再試一次。';
 const MESSAGE_RUN_FAILED = '刪除流程發生未預期錯誤，已停止。';
@@ -160,7 +163,7 @@ const MESSAGE_MANUAL_REJECTED = '目前狀態無法執行這個操作，請重�
 const MESSAGE_MANUAL_CLEAR_UNCONFIRMED = '無法確認安全紀錄是否已清除，請再試一次。';
 const MESSAGE_MANUAL_COMMIT_FAILED = '無法更新刪除進度，請再試一次。';
 const MESSAGE_MANUAL_CORRUPT_CHANGED = '安全紀錄已經變更，已重新檢查，請確認目前狀態。';
-const MESSAGE_RESOLVING_STILL_PRESENT = '正在解除上一批安全紀錄…';
+const MESSAGE_RESOLVING_STILL_PRESENT = '正在解除上一次的安全紀錄…';
 const MESSAGE_RESOLVING_DELETED = '正在更新已刪除照片的進度…';
 const MESSAGE_RESOLVING_CORRUPT = '正在清除損壞的安全紀錄…';
 
@@ -209,27 +212,27 @@ function manualBlockedKindOf(
 }
 
 /** 兩個進度事件是否完全相同（用來避免無意義的 re-render）。 */
-function progressSignature(event: DeleteRunnerProgressEvent): string {
+function progressSignature(event: DeleteTransactionProgressEvent): string {
   return [
     event.phase,
     event.runId,
     event.scopeKey,
-    event.currentBatchIndex,
+    event.totalPhotos,
     event.successfulCount,
     event.remainingCount,
     event.message ?? '',
   ].join('|');
 }
 
-export function useBatchDeletion({
+export function usePhotoDeletion({
   scopeKey,
   sessionReady,
   session,
-}: UseBatchDeletionParams): UseBatchDeletionResult {
-  const [status, setStatus] = useState<BatchDeletionHookStatus>('waiting-for-session');
+}: UsePhotoDeletionParams): UsePhotoDeletionResult {
+  const [status, setStatus] = useState<PhotoDeletionStatus>('waiting-for-session');
   const [recovery, setRecovery] = useState<DeleteRecoveryState>({ kind: 'idle' });
-  const [progress, setProgress] = useState<DeleteRunnerProgressEvent | null>(null);
-  const [result, setResult] = useState<DeleteRunnerResult | null>(null);
+  const [progress, setProgress] = useState<DeleteTransactionProgressEvent | null>(null);
+  const [result, setResult] = useState<DeleteTransactionResult | null>(null);
   const [isRunning, setIsRunning] = useState(false);
 
   /** 同步的重入鎖：setState 太慢，擋不住連點。 */
@@ -282,6 +285,12 @@ export function useBatchDeletion({
     return () => subscription.remove();
   }, []);
 
+  /**
+   * 只在**交易開始前**被 Runner 呼叫一次。
+   *
+   * 交易送出之後就不再檢查：iOS 的系統確認視窗本身會把 App 推成 `inactive`，
+   * 那不是錯誤，也沒有「下一批」需要等前景恢復。
+   */
   const isAppActive = useCallback(() => appStateRef.current === 'active', []);
 
   const isRecovering =
@@ -405,7 +414,7 @@ export function useBatchDeletion({
       }
       if (!alive()) return;
       if (!committed.ok) {
-        // 沒提交成功就不能清紀錄——那是重開後唯一能知道這批已刪的線索。
+        // 沒提交成功就不能清紀錄——那是重開後唯一能知道這些照片已刪的線索。
         blockPhotoDeleted(committed.message);
         return;
       }
@@ -576,7 +585,7 @@ export function useBatchDeletion({
             message: MESSAGE_MANUAL_REJECTED,
           };
         }
-        // 照片還在 → 上一批沒刪成功 → Session 一個字都不用改，只清紀錄。
+        // 照片還在 → 上一次沒刪成功 → Session 一個字都不用改，只清紀錄。
         const cleared = await clearDeleteJournalAsync(entry.scopeKey, entry.runId);
         if (!alive()) {
           return {
@@ -724,7 +733,7 @@ export function useBatchDeletion({
     recovery.scopeKey === scopeKey;
 
   const startDeleteRun = useCallback(
-    async (ids: readonly string[]): Promise<DeleteRunnerResult | null> => {
+    async (ids: readonly string[]): Promise<DeleteTransactionResult | null> => {
       // 同步鎖先關門，再做其他檢查——連點時第二次呼叫必須立刻被擋掉。
       // 人工解除進行中也一律拒絕：兩者共用同一份 Journal，不能同時動。
       if (runningRef.current || manualRecoveryRef.current) {
@@ -741,18 +750,8 @@ export function useBatchDeletion({
         return null;
       }
 
-      let plan;
-      try {
-        // 批次大小一律取自 delete-service 的常數，這裡不寫死任何數字，
-        // 也不新增使用者可見的上限。planDeleteBatches 遇到壞資料會 throw。
-        plan = planDeleteBatches(ids, MAX_DELETE_COUNT_PER_BATCH);
-      } catch {
-        return null;
-      }
-      if (plan.totalBatches === 0) {
-        return null;
-      }
-
+      // 不做任何分批規劃：使用者選多少張就一次全部送出。
+      // 去重與 ID 驗證由 runDeleteTransaction 自己處理（它不會 throw）。
       runningRef.current = true;
       const generation = generationRef.current;
       const stillCurrent = () =>
@@ -765,16 +764,17 @@ export function useBatchDeletion({
       setStatus('running');
 
       try {
-        const runResult = await runDeleteBatches(
-          { plan, scopeKey: capturedScopeKey },
+        const runResult = await runDeleteTransaction(
+          { photoIds: ids, scopeKey: capturedScopeKey },
           {
             loadJournal: loadDeleteJournalAsync,
             saveJournal: saveDeleteJournalAsync,
             clearJournal: clearDeleteJournalAsync,
             // 全專案唯一的刪除入口仍在 delete-service；這裡只是把它接上去。
-            deleteBatch: deletePhotoAssetsAsync,
-            commitDeletedBatch: (batchIds) =>
-              sessionRef.current.commitDeletedBatch(batchIds, capturedScopeKey),
+            // 一次呼叫、一次系統確認。
+            deletePhotos: deletePhotoAssetsAsync,
+            commitDeleted: (deletedIds) =>
+              sessionRef.current.commitDeletedBatch(deletedIds, capturedScopeKey),
             // 每次都重讀 ref，不用 render 閉包裡的舊值。
             getCurrentScopeKey: () => sessionRef.current.getScopeKeySnapshot() ?? '',
             getCurrentDiscardedIds: () => [...sessionRef.current.getStateSnapshot().discardedIds],
@@ -802,7 +802,7 @@ export function useBatchDeletion({
         }
         return runResult;
       } catch {
-        // runDeleteBatches 本身已經把所有 dependency 例外吃掉了，
+        // runDeleteTransaction 本身已經把所有 dependency 例外吃掉了，
         // 這裡只是最後一道保險：絕不讓它變成 unhandled rejection，
         // 也絕不自己捏造「已刪除」的 ID。殘留紀錄留給恢復流程處理。
         if (stillCurrent()) {

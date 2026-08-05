@@ -40,7 +40,7 @@
  *
  * - 本檔只做型別、純轉換與 AsyncStorage 讀寫，不含任何 React、UI 或刪除 API。
  * - 使用獨立的 storage key namespace，完全不碰 Session v5 的 key 或 payload。
- * - 不硬編碼任何批次大小；batchIds 的長度上限是 delete-service 的責任。
+ * - 不對 batchIds 的長度設任何上限：使用者選多少張就記錄多少張。
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -49,7 +49,7 @@ export const DELETE_JOURNAL_VERSION = 1;
 /** 獨立 namespace。與 Session 的 `photo-swipe-cleaner/session/v5/` 完全分開。 */
 export const DELETE_JOURNAL_KEY_PREFIX = 'photo-swipe-cleaner/delete-run/v1/';
 
-/** 保存失敗：呼叫端應該據此停止後續批次。 */
+/** 保存失敗：呼叫端應該據此中止這次刪除。 */
 export const DELETE_JOURNAL_SAVE_FAILED_MESSAGE = '無法儲存刪除安全紀錄，已停止後續刪除。';
 export const DELETE_JOURNAL_LOAD_FAILED_MESSAGE = '無法讀取刪除安全紀錄，請稍後再試一次。';
 export const DELETE_JOURNAL_CLEAR_FAILED_MESSAGE = '無法清除刪除安全紀錄，請稍後再試一次。';
@@ -74,19 +74,20 @@ export const DELETE_JOURNAL_CORRUPT_MESSAGE =
  *   不得自動重試，也不得自動加入 deletedIds。後續 UI 顯示失敗／不確定狀態，
  *   由使用者主動處理。
  *
- * 另外，讀到 `none`（沒有紀錄）代表正常：沒有未完成的批次。
+ * 另外，讀到 `none`（沒有紀錄）代表正常：沒有未完成的刪除交易。
  */
 export type DeleteJournalPhase = 'prepared' | 'photo-deleted' | 'uncertain';
 
 /**
- * 一筆刪除紀錄。一次只會有一筆「進行中的批次」，所以每個範圍只存一筆。
+ * 一筆刪除紀錄。一次只會有一筆「進行中的刪除交易」，所以每個範圍只存一筆。
  *
- * 索引慣例與 delete-batches.ts 一致：`batchIndex` 0-based、`batchNumber` 1-based，
- * 且恆等於 `batchIndex + 1`（存兩份是為了讓損壞資料能被交叉驗證出來）。
+ * `batchIndex`／`batchNumber`／`totalBatches` 是 v1 留下來的欄位名稱，保留是為了
+ * 讓舊紀錄仍然讀得回來。Beta 0.5 起 App 只做單次交易，寫入時固定是 0 / 1 / 1，
+ * UI 也不再顯示「第幾批」。
  */
 export type DeleteJournalEntryV1 = {
   version: 1;
-  /** 一整趟分批刪除的識別碼；用來防止舊流程清掉新流程的紀錄。 */
+  /** 一次刪除交易的識別碼；用來防止舊流程清掉新流程的紀錄。 */
   runId: string;
   /** 這筆紀錄屬於哪個整理範圍。必須與 storage key 相符。 */
   scopeKey: string;
@@ -115,7 +116,7 @@ export type DeleteJournalWriteResult =
  * - `corrupt`：**讀到了**資料，但 JSON 或 schema 無效 → 資料本身有問題
  * - `failed`：AsyncStorage 的 getItem 自己失敗 → 儲存層有問題，資料可能還好好的
  *
- * 這個區別很重要：`failed` 不可以被當成「沒有未完成批次」，否則會漏掉一筆
+ * 這個區別很重要：`failed` 不可以被當成「沒有未完成交易」，否則會漏掉一筆
  * 真正存在的 photo-deleted 紀錄。
  */
 export type DeleteJournalLoadResult =
@@ -262,7 +263,7 @@ export function createPreparedDeleteJournal({
 /**
  * 轉換 phase，回傳新的紀錄物件。
  *
- * `version`／`runId`／`scopeKey`／批次資訊／`createdAt` 一律不變，只有
+ * `version`／`runId`／`scopeKey`／照片清單／`createdAt` 一律不變，只有
  * `phase`／`updatedAt`／`message` 會更新。原本的 entry 完全不會被修改，
  * `batchIds` 也會複製一份，不與原 entry 共用同一個陣列。
  */
@@ -472,7 +473,7 @@ export async function loadDeleteJournalAsync(
   }
 
   // 紀錄裡的 scopeKey 必須與讀取用的 key 相符。
-  // 對不上就代表資料被搬移或竄改過，絕不能把別的範圍的批次當成這個範圍的。
+  // 對不上就代表資料被搬移或竄改過，絕不能把別的範圍的紀錄當成這個範圍的。
   if (validation.entry.scopeKey !== scopeKey) {
     return {
       status: 'corrupt',

@@ -38,7 +38,7 @@ export type CommitDeletedBatchResult =
 const COMMIT_INVALID_IDS_MESSAGE = '沒有可提交的照片 ID，進度沒有變更。';
 
 /** expectedScopeKey 與目前 state 歸屬不符時的訊息。 */
-const COMMIT_SCOPE_MISMATCH_MESSAGE = '整理範圍已變更，無法更新這批刪除進度。';
+const COMMIT_SCOPE_MISMATCH_MESSAGE = '整理範圍已變更，無法更新這次的刪除進度。';
 
 /** 還沒還原任何整理範圍就要求保存時的訊息。 */
 const SESSION_NOT_READY_MESSAGE = '進度尚未載入完成，請稍後再試一次。';

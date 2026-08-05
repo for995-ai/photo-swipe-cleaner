@@ -21,13 +21,15 @@ import { PixelNotice } from '@/components/pixel/pixel-notice';
 import { PixelSpinner } from '@/components/pixel/pixel-spinner';
 import { PixelSurface } from '@/components/pixel/pixel-surface';
 import { AppButton, Body, Caption, Screen } from '@/components/ui';
-import { useBatchDeletion } from '@/hooks/use-batch-deletion';
 import { useCleanup } from '@/hooks/use-cleanup';
 import { useDiscardedResolver } from '@/hooks/use-discarded-resolver';
-import type { BatchRunSummary, BatchStopReason } from '@/lib/delete-batches';
-import type { DeleteRunnerPhase } from '@/lib/delete-runner';
-// 刪除服務只用來取得批次大小常數；照片刪除一律由 useBatchDeletion 執行。
-import { MAX_DELETE_COUNT_PER_BATCH } from '@/lib/delete-service';
+import { usePhotoDeletion } from '@/hooks/use-photo-deletion';
+import type {
+  DeleteStopReason,
+  DeleteTransactionPhase,
+  DeleteTransactionResult,
+  DeleteTransactionSummary,
+} from '@/lib/delete-runner';
 import { formatPhotoDate, type RecentPhoto } from '@/lib/photos';
 import { scopeKey } from '@/lib/scope';
 import { border, colors, iconSize, radius, shadow, spacing } from '@/lib/theme';
@@ -38,30 +40,29 @@ const COLUMNS = 3;
 /**
  * 每個執行階段對應的說明文字。
  *
- * 全部都是真實狀態，沒有百分比也沒有預估時間——分批刪除的每一批都要等
- * iPhone 的系統確認，剩餘時間完全取決於使用者手速，任何估計都是假的。
+ * 全部都是真實狀態，沒有百分比也沒有預估時間——處理時間完全取決於
+ * 使用者在 iPhone 系統確認視窗上的反應速度與照片數量，任何估計都是假的。
  */
-const PHASE_TEXT: Record<DeleteRunnerPhase, string> = {
+const PHASE_TEXT: Record<DeleteTransactionPhase, string> = {
   preflight: '正在檢查刪除條件…',
   'preparing-journal': '正在建立刪除安全紀錄…',
   'waiting-for-system-confirmation': '正在等待 iPhone 系統確認…',
-  'marking-photo-deleted': '正在記錄本批刪除結果…',
+  'marking-photo-deleted': '正在記錄刪除結果…',
   'committing-session': '正在儲存整理進度…',
-  'clearing-journal': '正在完成本批安全檢查…',
-  'batch-succeeded': '本批已完成，準備下一批…',
+  'clearing-journal': '正在完成安全檢查…',
   stopped: '已停止刪除。',
-  completed: '已完成所有批次。',
+  completed: '已完成刪除。',
 };
 
 /** progress 還沒到、或 phase 是未知值時的保底文字。 */
 const PHASE_FALLBACK_TEXT = '正在處理刪除…';
 
-const STOP_TITLE: Record<BatchStopReason, string> = {
+const STOP_TITLE: Record<DeleteStopReason, string> = {
   done: '刪除已結束',
   cancelled: '你已取消刪除',
-  failed: '刪除過程發生問題',
+  failed: '本次刪除未完成',
   'persistence-failed': '進度或安全紀錄尚未完成儲存',
-  'app-backgrounded': 'App 進入背景，已停止刪除',
+  'app-backgrounded': 'App 不在前景，未開始刪除',
 };
 
 /**
@@ -70,7 +71,7 @@ const STOP_TITLE: Record<BatchStopReason, string> = {
  * `persistence-failed` 預設是 danger，但 Runner 在「使用者取消 + 紀錄清不掉」
  * 時也會用這個原因，那種情況主因其實是使用者自己取消，用紅色失敗語氣會誤導。
  */
-function stopTone(summary: BatchRunSummary): 'warning' | 'danger' {
+function stopTone(summary: DeleteTransactionSummary): 'warning' | 'danger' {
   switch (summary.stoppedReason) {
     case 'cancelled':
     case 'app-backgrounded':
@@ -137,8 +138,8 @@ export default function ReviewScreen() {
   const confirmationAlertOpenRef = useRef(false);
 
   /**
-   * 分批刪除只由這個 Hook 執行：批次規劃、AppState、安全紀錄、逐批提交
-   * 全部在 Hook 與其底層純模組裡，Review 不自己寫迴圈、不自己碰 PhotoKit。
+   * 刪除只由這個 Hook 執行：AppState、安全紀錄、Session 提交全部在 Hook 與其
+   * 底層純模組裡。Review 不自己碰 PhotoKit、不自己寫迴圈、不自己切分清單。
    */
   const sessionPort = useMemo(
     () => ({
@@ -148,7 +149,7 @@ export default function ReviewScreen() {
     }),
     [session.commitDeletedBatch, session.getStateSnapshot, session.getScopeKeySnapshot]
   );
-  const batchDeletion = useBatchDeletion({
+  const deletion = usePhotoDeletion({
     scopeKey: activeScopeKey,
     sessionReady: session.ready,
     session: sessionPort,
@@ -177,29 +178,25 @@ export default function ReviewScreen() {
   /**
    * 刪除是否可以開始。
    *
-   * **不再有「超過 20 張就停用」這一條**：21、45、100 張都可以啟動，
-   * 只是會被拆成多批。MAX_DELETE_COUNT_PER_BATCH 現在只用於顯示每批上限、
-   * 計算批數，以及 Hook 內部的 planDeleteBatches。
+   * **完全沒有張數上限**：1、20、21、45、100、500 張都走同一條單次交易路徑。
+   * App 不再分批，所以也沒有任何「每批最多幾張」的概念。
    *
-   * batchDeletion.canStart 已經涵蓋 sessionReady、recovery 必須是 ready、
-   * recovery 的範圍必須與目前範圍相同、沒有 run 或人工恢復正在執行。
+   * deletion.canStart 已經涵蓋 sessionReady、recovery 必須是 ready、
+   * recovery 的範圍必須與目前範圍相同、沒有交易或人工恢復正在執行。
    */
   const canDelete =
-    readyForDeletion &&
-    batchDeletion.canStart &&
-    !batchDeletion.isRunning &&
-    !batchDeletion.isRecovering;
+    readyForDeletion && deletion.canStart && !deletion.isRunning && !deletion.isRecovering;
 
-  const runResult = batchDeletion.result;
-  const progress = batchDeletion.progress;
-  const recovery = batchDeletion.recovery;
-  const isBusy = batchDeletion.isRunning || batchDeletion.isRecovering;
+  const runResult = deletion.result;
+  const progress = deletion.progress;
+  const recovery = deletion.recovery;
+  const isBusy = deletion.isRunning || deletion.isRecovering;
 
-  /** 這一趟分批刪除完整跑完。 */
+  /** 這次刪除交易完整跑完。 */
   const showRunCompleted =
-    batchDeletion.status === 'completed' && runResult?.summary.outcome === 'completed';
+    deletion.status === 'completed' && runResult?.summary.outcome === 'completed';
   /** 這一趟中途停止。 */
-  const showRunStopped = batchDeletion.status === 'stopped' && runResult !== null;
+  const showRunStopped = deletion.status === 'stopped' && runResult !== null;
   /** 沒有進行中的 run 結果，但待刪清單已清空且刪過照片（例如稍後再回到本頁）。 */
   const showLegacySummary =
     !showRunCompleted &&
@@ -219,7 +216,7 @@ export default function ReviewScreen() {
 
   /** 正在載入或恢復：鎖住操作並顯示 spinner。 */
   const recoveryLoadingText =
-    batchDeletion.status === 'waiting-for-session'
+    deletion.status === 'waiting-for-session'
       ? '正在載入整理進度…'
       : recovery.kind === 'checking'
         ? '正在檢查刪除安全紀錄…'
@@ -234,11 +231,7 @@ export default function ReviewScreen() {
     session.discardedCount > 0 && !showRunCompleted && !showRunStopped && !blockedRecoveryKind;
 
   /** 導覽與清單編輯是否鎖住。 */
-  const navigationLocked = batchDeletion.isScopeLocked;
-
-  /** 目前這批待刪照片會被拆成幾批。批次大小一律取自常數，不寫死數字。 */
-  const plannedBatches =
-    resolvedCount > 0 ? Math.ceil(resolvedCount / MAX_DELETE_COUNT_PER_BATCH) : 0;
+  const navigationLocked = deletion.isScopeLocked;
 
   // 開發期自檢：待刪除總數必須永遠等於三種狀態之和。
   useEffect(() => {
@@ -314,7 +307,7 @@ export default function ReviewScreen() {
    * - 開啟前同步上鎖
    * - 取消／返回一律立即解鎖
    * - 確認則等 onConfirm settle 後在 finally 解鎖，所以 handler 執行期間
-   *   （例如整趟分批刪除還在跑）也不會被開出第二個視窗
+   *   （例如整次刪除交易還在跑）也不會被開出第二個視窗
    * - `Alert.alert` 自己同步 throw 時也要解鎖，否則會永久鎖死
    *
    * `cancelable: false` 是必要的：Android 允許點視窗外面關閉，那條路徑不會觸發
@@ -405,13 +398,13 @@ export default function ReviewScreen() {
   };
 
   /**
-   * 啟動分批刪除。批次規劃、系統確認、逐批提交都在 Hook 裡，
+   * 啟動單次刪除交易。系統確認與 Session 提交都在 Hook 裡，
    * 這裡只負責把「真正成功的 ID」反映到 resolver 快取與相簿分頁。
    */
   const startRun = async (ids: string[]) => {
     setUiMessage(null);
     try {
-      const result = await batchDeletion.startDeleteRun(ids);
+      const result = await deletion.startDeleteRun(ids);
       if (!result) {
         // 沒有啟動或提早停止：不假設成功，畫面交給 Hook 的 status／recovery 決定。
         return;
@@ -419,7 +412,7 @@ export default function ReviewScreen() {
       const successful = result.summary.successfulIds;
       if (successful.length > 0) {
         // 只丟掉確定刪掉的 ID —— 不是全部 ids、不是 remainingIds。
-        // 這兩步失敗都不代表刪除失敗，也絕不回滾 Session（Hook 已逐批提交）。
+        // 這兩步失敗都不代表刪除失敗，也絕不回滾 Session（Hook 已提交）。
         resolution.dropFromCache(successful);
         pager.reload();
       }
@@ -438,32 +431,27 @@ export default function ReviewScreen() {
       return;
     }
     const totalPhotos = ids.length;
-    const totalBatches = Math.ceil(totalPhotos / MAX_DELETE_COUNT_PER_BATCH);
-    const body =
-      totalBatches === 1
-        ? `準備刪除 ${totalPhotos} 張照片，只需要一批（每批最多 ${MAX_DELETE_COUNT_PER_BATCH} 張）。iPhone 會要求你確認一次。照片會移至「最近刪除」，通常可在 30 天內復原。`
-        : `準備刪除 ${totalPhotos} 張照片，將分成 ${totalBatches} 批，每批最多 ${MAX_DELETE_COUNT_PER_BATCH} 張。iPhone 每一批都會要求你確認一次。照片會移至「最近刪除」，通常可在 30 天內復原。`;
 
     openGuardedConfirmation({
-      title: '確認分批刪除照片？',
-      message: body,
+      title: '確認刪除照片？',
+      message: `準備一次刪除 ${totalPhotos} 張照片。iPhone 會要求你確認一次。照片會移至「最近刪除」，通常可在 30 天內復原。處理期間請保持 App 開啟。`,
       cancelLabel: '取消',
-      confirmLabel: '開始分批刪除',
+      confirmLabel: '開始刪除',
       destructive: true,
       onConfirm: () => startRun(ids),
     });
   };
 
-  /** 中途停止後重試：不沿用舊 plan，重新從目前的 resolver 清單開始。 */
+  /** 停止後重試：重新從目前的 resolver 清單開始，不沿用上一次的 ID 快照。 */
   const handleRetryRemaining = () => {
     setUiMessage(null);
-    batchDeletion.resetRunResult();
+    deletion.resetRunResult();
     // 不自動開始 —— 使用者要再按一次刪除按鈕並通過 App 內確認。
   };
 
   const handleContinueAfterRun = () => {
     setUiMessage(null);
-    batchDeletion.resetRunResult();
+    deletion.resetRunResult();
     pager.reload();
     router.back();
   };
@@ -491,13 +479,13 @@ export default function ReviewScreen() {
     openGuardedConfirmation({
       title: '確認照片仍存在？',
       message:
-        '請確認你已經在 iPhone「照片」App 看過，這批照片目前仍存在。繼續後只會解除安全紀錄，不會刪除照片，也不會改變待刪清單。',
+        '請確認你已經在 iPhone「照片」App 看過，這些照片目前仍存在。繼續後只會解除安全紀錄，不會刪除照片，也不會改變待刪清單。',
       cancelLabel: '返回檢查',
       confirmLabel: '確認仍存在',
       // 只解除紀錄、不動照片也不動 Session，所以不是破壞性操作。
       destructive: false,
       onConfirm: async () => {
-        const result = await batchDeletion.confirmPhotosStillPresent();
+        const result = await deletion.confirmPhotosStillPresent();
         applyManualResult(result, 'warning');
       },
     });
@@ -507,12 +495,12 @@ export default function ReviewScreen() {
     openGuardedConfirmation({
       title: '確認照片已刪除？',
       message:
-        '請確認你已經在 iPhone「照片」App 看過，這批照片已經不在相簿中。繼續後會把這批照片記錄為已刪除，但不會再次呼叫 iPhone 刪除功能。',
+        '請確認你已經在 iPhone「照片」App 看過，這些照片已經不在相簿中。繼續後會把這些照片記錄為已刪除，但不會再次呼叫 iPhone 刪除功能。',
       cancelLabel: '返回檢查',
       confirmLabel: '確認已刪除',
       destructive: true,
       onConfirm: async () => {
-        const result = await batchDeletion.confirmPhotosDeleted();
+        const result = await deletion.confirmPhotosDeleted();
         applyManualResult(result, 'danger');
       },
     });
@@ -527,7 +515,7 @@ export default function ReviewScreen() {
       confirmLabel: '確認清除',
       destructive: true,
       onConfirm: async () => {
-        const result = await batchDeletion.confirmClearCorruptJournal();
+        const result = await deletion.confirmClearCorruptJournal();
         applyManualResult(result, 'danger');
       },
     });
@@ -535,7 +523,7 @@ export default function ReviewScreen() {
 
   const handleRetryRecovery = () => {
     setUiMessage(null);
-    batchDeletion.retryRecovery();
+    deletion.retryRecovery();
   };
 
   /** 本地訊息（人工操作的回饋）。成功時會被清掉。 */
@@ -563,7 +551,7 @@ export default function ReviewScreen() {
         <View style={styles.recoveryWrap}>
           <PixelNotice
             tone={isUncertain ? 'danger' : 'warning'}
-            title={isUncertain ? '上一批刪除結果無法確認' : '上一批刪除結果待確認'}
+            title={isUncertain ? '上一次刪除結果無法確認' : '上一次刪除結果待確認'}
             icon={
               <WarnIcon
                 size={iconSize.sm}
@@ -571,16 +559,11 @@ export default function ReviewScreen() {
               />
             }>
             {isUncertain
-              ? '刪除過程曾發生錯誤，App 無法判斷這批照片是否已經刪除。請先在 iPhone「照片」App 逐一確認，再選擇正確結果。'
-              : 'App 無法確認上一批是否已經完成。請先打開 iPhone「照片」App，檢查這批照片是否仍存在，再選擇下方結果。'}
+              ? '刪除過程曾發生錯誤，App 無法判斷這些照片是否已經刪除。請先在 iPhone「照片」App 逐一確認，再選擇正確結果。'
+              : 'App 無法確認上一次刪除是否已經完成。請先打開 iPhone「照片」App，檢查這些照片是否仍存在，再選擇下方結果。'}
           </PixelNotice>
-          {/* 只顯示批次與張數，不顯示 runId 也不顯示任何原始儲存內容。 */}
+          {/* 只顯示張數。不顯示 runId，也不顯示任何原始儲存內容。 */}
           <View style={styles.stats}>
-            <PixelBadge
-              label="批次"
-              value={`${entry.batchNumber} / ${entry.totalBatches}`}
-              tone="info"
-            />
             <PixelBadge label="涉及照片" value={entry.batchIds.length} tone="discard" />
           </View>
           {renderUiMessage()}
@@ -607,7 +590,7 @@ export default function ReviewScreen() {
             tone="danger"
             title="刪除安全紀錄損壞"
             icon={<WarnIcon size={iconSize.sm} fill={colors.discard} />}>
-            App 無法讀取上一批的安全紀錄。請先自行確認相簿狀態。清除後 App
+            App 無法讀取上一次的安全紀錄。請先自行確認相簿狀態。清除後 App
             只會移除這筆損壞紀錄，不會刪除任何照片，也不會修改整理進度。
           </PixelNotice>
           {renderUiMessage()}
@@ -644,13 +627,14 @@ export default function ReviewScreen() {
     );
   };
 
-  /** 中途停止摘要。tone 依停止原因決定，取消不用失敗紅字。 */
+  /** 停止摘要。tone 依停止原因決定，取消不用失敗紅字。 */
   const renderStoppedSummary = (
-    summary: BatchRunSummary,
-    result: NonNullable<typeof runResult>
+    summary: DeleteTransactionSummary,
+    result: DeleteTransactionResult
   ) => {
     const tone = stopTone(summary);
-    const backgrounded = summary.stoppedReason === 'app-backgrounded';
+    const cancelled = summary.stoppedReason === 'cancelled';
+    const nothingDeleted = summary.successfulIds.length === 0;
     return (
       <View style={styles.recoveryWrap}>
         <PixelNotice
@@ -662,20 +646,21 @@ export default function ReviewScreen() {
               fill={tone === 'warning' ? colors.warning : colors.discard}
             />
           }>
-          {backgrounded
-            ? 'App 已進入背景，因此沒有開始下一批。已完成的照片保留，剩餘照片仍在待刪清單。'
-            : (summary.message ?? '刪除已停止。')}
+          {summary.message ?? '刪除已停止。'}
         </PixelNotice>
         <View style={styles.stats}>
-          <PixelBadge label="已成功刪除" value={summary.successfulIds.length} tone="keep" />
-          <PixelBadge label="尚未處理" value={summary.remainingIds.length} tone="discard" />
+          <PixelBadge label="成功刪除" value={summary.successfulIds.length} tone="keep" />
+          <PixelBadge label="仍待刪除" value={summary.remainingIds.length} tone="discard" />
         </View>
         <View style={styles.stats}>
-          <PixelBadge label="完成批次" value={result.completedBatchCount} tone="info" />
           <PixelBadge label="系統確認" value={result.systemConfirmationCount} tone="neutral" />
         </View>
         <Caption>
-          已成功刪除的照片不會恢復，已移到 iPhone「最近刪除」。剩餘照片仍留在待刪清單裡。
+          {nothingDeleted
+            ? cancelled
+              ? '沒有任何照片被刪除，你選的照片仍留在待刪清單裡。App 不會自動重試。'
+              : '這次沒有假設任何照片已被刪除，你選的照片仍留在待刪清單裡。App 不會自動重試。'
+            : '已成功刪除的照片不會恢復，已移到 iPhone「最近刪除」。'}
         </Caption>
         {renderUiMessage()}
         {/*
@@ -688,11 +673,7 @@ export default function ReviewScreen() {
         */}
         {recovery.kind === 'ready' && result.journalPhase === 'none' ? (
           summary.remainingIds.length > 0 ? (
-            <AppButton
-              label="重新嘗試剩餘照片"
-              disabled={isBusy}
-              onPress={handleRetryRemaining}
-            />
+            <AppButton label="重新嘗試刪除" disabled={isBusy} onPress={handleRetryRemaining} />
           ) : null
         ) : result.journalPhase !== 'none' ? (
           <AppButton
@@ -865,7 +846,7 @@ export default function ReviewScreen() {
               <Text
                 style={[typeStyle(typeAccent.sectionTitle, width), styles.successTitle]}
                 maxFontSizeMultiplier={textScaling.maxFontSizeMultiplier}>
-                已完成分批刪除
+                已完成刪除
               </Text>
               <View style={styles.stats}>
                 <PixelBadge
@@ -873,14 +854,13 @@ export default function ReviewScreen() {
                   value={runResult.summary.successfulIds.length}
                   tone="keep"
                 />
-                <PixelBadge label="完成批次" value={runResult.completedBatchCount} tone="info" />
-              </View>
-              <View style={styles.stats}>
                 <PixelBadge
                   label="系統確認"
                   value={runResult.systemConfirmationCount}
                   tone="neutral"
                 />
+              </View>
+              <View style={styles.stats}>
                 <PixelBadge label="剩餘待刪" value={session.discardedCount} tone="discard" />
               </View>
               <Caption>照片已移到 iPhone「照片」App 的「最近刪除」，可在那裡復原。</Caption>
@@ -1030,41 +1010,35 @@ export default function ReviewScreen() {
               <PixelBadge label="安全刪除模式" tone="discard" />
             </View>
             <Caption>
-              {plannedBatches > 1
-                ? `將分成 ${plannedBatches} 批，每批最多 ${MAX_DELETE_COUNT_PER_BATCH} 張。iPhone 每一批都會要求你確認一次。`
-                : `每批最多 ${MAX_DELETE_COUNT_PER_BATCH} 張。按下後照片會移至 iPhone「最近刪除」，刪除前仍會由 iPhone 再次確認。`}
+              你選擇的照片會一次送出刪除。iPhone
+              會要求你確認一次，照片之後會移至「最近刪除」。
             </Caption>
 
-            {batchDeletion.isRunning ? (
-              // 執行中：只顯示真實批次進度，沒有百分比也沒有預估時間。
+            {deletion.isRunning ? (
+              // 執行中：只顯示真實狀態，沒有百分比、沒有預估時間。
               <View
                 accessible
                 accessibilityRole="text"
                 accessibilityLabel={
                   progress
-                    ? `正在處理第 ${progress.currentBatchNumber} 批，共 ${progress.totalBatches} 批。本批 ${progress.currentBatchSize} 張。已成功刪除 ${progress.successfulCount} 張，尚待處理 ${progress.remainingCount} 張。`
+                    ? `本次準備刪除 ${progress.totalPhotos} 張。已成功刪除 ${progress.successfulCount} 張，尚未處理 ${progress.remainingCount} 張。${PHASE_TEXT[progress.phase] ?? PHASE_FALLBACK_TEXT}`
                     : '正在處理刪除'
                 }
                 style={styles.progressBox}>
                 <View style={styles.statusRow}>
                   <PixelSpinner size={iconSize.sm} />
-                  <Caption>
-                    {progress
-                      ? `正在處理第 ${progress.currentBatchNumber} / ${progress.totalBatches} 批`
-                      : PHASE_FALLBACK_TEXT}
-                  </Caption>
+                  <Caption>{progress ? `本次準備刪除 ${progress.totalPhotos} 張` : PHASE_FALLBACK_TEXT}</Caption>
                 </View>
                 {progress ? (
                   <>
                     <View style={styles.stats}>
-                      <PixelBadge label="本批" value={progress.currentBatchSize} tone="info" />
                       <PixelBadge
                         label="已成功刪除"
                         value={progress.successfulCount}
                         tone="keep"
                       />
                       <PixelBadge
-                        label="尚待處理"
+                        label="尚未處理"
                         value={progress.remainingCount}
                         tone="discard"
                       />
@@ -1084,8 +1058,8 @@ export default function ReviewScreen() {
 
             <AppButton
               label={
-                batchDeletion.isRunning
-                  ? '正在分批刪除…'
+                deletion.isRunning
+                  ? '正在刪除…'
                   : resolvedCount > 0
                     ? `刪除 ${resolvedCount} 張照片`
                     : '尚無可刪除的照片'
@@ -1359,7 +1333,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: spacing.md,
   },
-  /** 執行中的批次進度區塊。 */
+  /** 執行中的進度區塊。 */
   progressBox: {
     gap: spacing.sm,
   },
