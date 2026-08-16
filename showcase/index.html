@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>相簿滑滑整理 Photo Swipe Cleaner｜專案介紹</title>
+<meta name="description" content="用滑動整理 iPhone 相簿的 App。左滑加入待刪除、右滑保留，照片只在裝置本機處理。" />
+<link rel="icon" href="favicon.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#F7F8FC; --surface:#fff; --border:#E6E2ED;
+    --text:#171525; --sec:#666273; --muted:#9590A8;
+    --purple:#7457E8; --lavender:#F3F0FF; --cyan:#54C7D9;
+    --radius:20px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:'Noto Sans TC','Space Grotesk',system-ui,sans-serif;
+    line-height:1.7; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:860px;margin:0 auto;padding:0 20px}
+  h1,h2,h3{font-family:'Space Grotesk','Noto Sans TC',sans-serif;line-height:1.3}
+
+  /* Hero */
+  header{
+    padding:72px 0 56px;
+    background:
+      radial-gradient(ellipse 60% 70% at 15% 20%, rgba(116,87,232,.14) 0%, transparent 55%),
+      radial-gradient(ellipse 50% 60% at 88% 80%, rgba(84,199,217,.10) 0%, transparent 50%),
+      linear-gradient(160deg,#EAE6FF 0%,#F7F8FC 45%,#E8F6FF 100%);
+    text-align:center;
+  }
+  .icon{
+    width:104px;height:104px;border-radius:24px;display:block;margin:0 auto 24px;
+    box-shadow:0 10px 30px rgba(23,21,37,.16); object-fit:cover;
+  }
+  header h1{font-size:clamp(1.75rem,5vw,2.5rem);font-weight:700;margin-bottom:10px}
+  .en{font-family:'Space Grotesk',sans-serif;font-size:.8rem;letter-spacing:.22em;color:var(--muted);margin-bottom:18px}
+  .tagline{font-size:clamp(.95rem,2.2vw,1.0625rem);color:var(--sec);max-width:540px;margin:0 auto 24px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+  .chip{
+    background:var(--lavender);color:var(--purple);border:1px solid rgba(116,87,232,.16);
+    border-radius:999px;padding:5px 14px;font-size:.8125rem;font-weight:600;
+  }
+
+  /* Sections */
+  section{padding:44px 0;border-bottom:1px solid var(--border)}
+  section:last-of-type{border-bottom:none}
+  .label{
+    font-family:'Space Grotesk',sans-serif;font-size:.65rem;font-weight:700;
+    letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:12px;
+  }
+  section h2{font-size:1.25rem;font-weight:700;margin-bottom:14px}
+  section p{color:var(--sec);margin-bottom:12px}
+
+  .cards{display:grid;grid-template-columns:1fr;gap:14px;margin-top:18px}
+  @media(min-width:700px){.cards{grid-template-columns:1fr 1fr}}
+  .card{
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+    padding:20px 22px;box-shadow:0 2px 12px rgba(23,21,37,.06);
+  }
+  .card h3{font-size:1rem;font-weight:700;margin-bottom:8px}
+  .card p{font-size:.875rem;margin:0}
+
+  /* Swipe explainer */
+  .swipe{display:grid;grid-template-columns:1fr;gap:14px;margin-top:20px}
+  @media(min-width:700px){.swipe{grid-template-columns:1fr 1fr}}
+  .swipe-item{
+    border-radius:var(--radius);padding:22px;border:1px solid var(--border);
+    background:var(--surface);
+  }
+  .swipe-item .dir{font-size:1.6rem;line-height:1;margin-bottom:10px}
+  .swipe-item h3{font-size:1rem;margin-bottom:6px}
+  .swipe-item p{font-size:.875rem;margin:0}
+  .swipe-left{border-left:4px solid #E86A6A}
+  .swipe-right{border-left:4px solid #4CAF7D}
+
+  /* Status list */
+  ul.status{list-style:none;display:flex;flex-direction:column;gap:9px;margin-top:6px}
+  ul.status li{display:flex;gap:10px;align-items:flex-start;font-size:.9rem;color:var(--sec)}
+  ul.status li .mark{flex-shrink:0;font-weight:700;width:18px}
+  .done .mark{color:#3E9E6E}
+  .todo .mark{color:var(--muted)}
+
+  .note{
+    background:var(--lavender);border:1px solid rgba(116,87,232,.16);
+    border-radius:14px;padding:16px 18px;font-size:.875rem;color:var(--sec);margin-top:18px;
+  }
+
+  .stack{display:flex;flex-wrap:wrap;gap:7px;margin-top:14px}
+  .tag{
+    font-family:'Space Grotesk',monospace;font-size:.75rem;color:var(--purple);
+    background:rgba(116,87,232,.09);border:1px solid rgba(116,87,232,.18);
+    border-radius:6px;padding:3px 9px;
+  }
+
+  .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
+  .btn{
+    display:inline-flex;align-items:center;height:44px;padding:0 22px;border-radius:999px;
+    font-weight:600;font-size:.875rem;text-decoration:none;transition:transform .18s ease,box-shadow .18s ease;
+  }
+  .btn:hover{transform:translateY(-2px)}
+  .btn-primary{background:var(--purple);color:#fff;box-shadow:0 2px 12px rgba(116,87,232,.28)}
+  .btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+
+  footer{padding:36px 0 56px;text-align:center;color:var(--muted);font-size:.8125rem}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <img class="icon" src="icon.png" alt="相簿滑滑整理 App 圖示" />
+    <h1>相簿滑滑整理</h1>
+    <p class="en">PHOTO SWIPE CLEANER</p>
+    <p class="tagline">
+      用滑動整理 iPhone 相簿的 App。左滑加入待刪除、右滑保留，可復原；
+      真正刪除前會再次確認。照片只在裝置本機處理，不會上傳。
+    </p>
+    <div class="chips">
+      <span class="chip">React Native</span>
+      <span class="chip">Expo</span>
+      <span class="chip">TypeScript</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section>
+    <p class="label">Concept</p>
+    <h2>為什麼做這個 App</h2>
+    <p>
+      相簿裡最難整理的不是找不到照片，而是「連拍後留下的十幾張幾乎一樣的照片」。
+      一張一張點開、比較、刪除，操作成本高到讓人放棄。
+    </p>
+    <p>
+      這個專案把整理流程壓縮成單一手勢：一次看一張，往左或往右滑，決定去留。
+      判斷與操作合而為一，讓整理相簿變成可以連續進行的動作。
+    </p>
+  </section>
+
+  <section>
+    <p class="label">Interaction</p>
+    <h2>滑動整理的操作設計</h2>
+    <div class="swipe">
+      <div class="swipe-item swipe-left">
+        <div class="dir">←</div>
+        <h3>左滑：加入待刪除</h3>
+        <p>照片不會立刻消失，而是進入待刪除清單，仍可復原。</p>
+      </div>
+      <div class="swipe-item swipe-right">
+        <div class="dir">→</div>
+        <h3>右滑：保留</h3>
+        <p>保留照片並前進到下一張，維持連續的整理節奏。</p>
+      </div>
+    </div>
+    <div class="note">
+      <strong>刪除是最後一步，而且要再確認一次。</strong>
+      待刪除清單累積後才會統一送出，避免手勢誤觸造成無法挽回的結果。
+    </div>
+  </section>
+
+  <section>
+    <p class="label">Privacy</p>
+    <h2>照片只留在裝置上</h2>
+    <p>
+      所有照片讀取與判斷都在裝置本機完成，App 不會將照片上傳到任何伺服器，
+      也沒有帳號或雲端同步機制。
+    </p>
+  </section>
+
+  <section>
+    <p class="label">Development Status</p>
+    <h2>目前進度：第一階段</h2>
+    <p>本專案仍在開發中。以下為實際完成與尚未實作的項目：</p>
+
+    <div class="cards">
+      <div class="card">
+        <h3>已完成</h3>
+        <ul class="status">
+          <li class="done"><span class="mark">✓</span>專案初始化（Expo SDK 54 / RN 0.81 / TypeScript / Expo Router）</li>
+          <li class="done"><span class="mark">✓</span>相簿權限流程（未詢問／完整存取／有限存取／拒絕）</li>
+          <li class="done"><span class="mark">✓</span>授權後讀取最近 30 張照片（排除影片，依建立時間排序）</li>
+          <li class="done"><span class="mark">✓</span>照片瀏覽測試頁：單張顯示、進度、日期、上一張／下一張</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>尚未實作</h3>
+        <ul class="status">
+          <li class="todo"><span class="mark">–</span>左右滑動手勢</li>
+          <li class="todo"><span class="mark">–</span>待刪除清單</li>
+          <li class="todo"><span class="mark">–</span>狀態保存</li>
+          <li class="todo"><span class="mark">–</span>刪除 API（目前程式碼中不存在任何刪除照片的呼叫）</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="note">
+      上方「滑動整理的操作設計」描述的是本專案的設計方向，
+      手勢與刪除流程屬於後續階段，尚未實作完成。
+    </div>
+  </section>
+
+  <section>
+    <p class="label">Tech Stack</p>
+    <h2>技術組成</h2>
+    <div class="stack">
+      <span class="tag">React Native 0.81</span>
+      <span class="tag">Expo SDK 54</span>
+      <span class="tag">Expo Router</span>
+      <span class="tag">expo-media-library</span>
+      <span class="tag">expo-image</span>
+      <span class="tag">expo-haptics</span>
+      <span class="tag">TypeScript</span>
+    </div>
+    <p style="margin-top:16px">
+      這是原生行動應用程式，核心功能依賴裝置的相簿存取權限，
+      因此沒有對應的網頁版本；本頁為專案介紹，不是可操作的 Web App。
+    </p>
+    <div class="actions">
+      <a class="btn btn-primary" href="https://github.com/for995-ai/photo-swipe-cleaner" target="_blank" rel="noopener noreferrer">查看原始碼 ↗</a>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="wrap">相簿滑滑整理 Photo Swipe Cleaner · MING WEI SU</div>
+</footer>
+
+</body>
+</html>
