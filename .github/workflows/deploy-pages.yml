@@ -1,8 +1,17 @@
-name: Deploy showcase to GitHub Pages
+name: Deploy showcase and portfolio demo to GitHub Pages
 
-# Publishes the static project showcase in /showcase.
-# The app itself is React Native and has no web build — this is a project
-# introduction page, not a web port.
+# Publishes two things to the same Pages site:
+#
+#   /photo-swipe-cleaner/       → the static Case Study in /showcase (unchanged)
+#   /photo-swipe-cleaner/demo/  → the interactive Portfolio Demo (Expo web export)
+#
+# The Case Study stays the site root. The Expo export writes its own index.html
+# for the app's home screen, and that file is deliberately NOT copied into the
+# artifact — only the /demo route plus the runtime assets it needs.
+#
+# The app's real screens (/photos, /review, /permission, /scope, /about,
+# /feedback, /_sitemap) are also excluded: this Pages site is a portfolio, not a
+# web port of the app.
 
 on:
   push:
@@ -29,13 +38,90 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Asset URLs are absolute, so the repository subpath has to be baked in at
+      # build time. app.config.js adds experiments.baseUrl only when this env var
+      # is "1", so native builds never carry the GitHub Pages prefix.
+      - name: Export Expo web build
+        run: npx expo export --platform web
+        env:
+          GITHUB_PAGES_BUILD: "1"
+
+      # Fail loudly rather than silently shipping root-absolute URLs that would
+      # 404 under the repository subpath.
+      - name: Verify the base path was applied
+        run: |
+          set -euo pipefail
+          grep -q '"/photo-swipe-cleaner/_expo/static/js/web' dist/demo.html \
+            || { echo "baseUrl was not applied to dist/demo.html"; exit 1; }
+          echo "base path applied"
+
+      - name: Verify demo route was exported
+        run: test -f dist/demo.html
+
+      - name: Assemble Pages artifact
+        run: |
+          set -euo pipefail
+          rm -rf pages-staging
+          mkdir -p pages-staging
+
+          # 1. Case Study owns the site root.
+          cp -R showcase/. pages-staging/
+
+          # 2. Expo writes dist/demo.html as a flat file, but /demo/ needs a
+          #    directory index. Copy it into place instead of changing the route.
+          mkdir -p pages-staging/demo
+          cp dist/demo.html pages-staging/demo/index.html
+
+          # 3. Runtime assets the demo actually loads.
+          cp -R dist/_expo pages-staging/_expo
+          if [ -d dist/assets ]; then cp -R dist/assets pages-staging/assets; fi
+          if [ -f dist/favicon.ico ]; then cp dist/favicon.ico pages-staging/favicon.ico; fi
+
+          # 4. _expo starts with an underscore, which Jekyll would drop.
+          touch pages-staging/.nojekyll
+
+          echo "--- artifact tree (depth 2) ---"
+          find pages-staging -maxdepth 2 | sort
+
+      - name: Check the artifact is shaped correctly
+        run: |
+          set -euo pipefail
+          # Case Study must still be the root page, not the Expo app shell.
+          #
+          # Written as an explicit `if` on purpose: `! grep -q ...` would be
+          # exempt from errexit, so a violated assertion would not fail the job.
+          test -f pages-staging/index.html
+          if grep -q "_expo/static/js/web" pages-staging/index.html; then
+            echo "pages-staging/index.html looks like the Expo shell, not the Case Study"
+            exit 1
+          fi
+          # Demo must be reachable as a directory index.
+          test -f pages-staging/demo/index.html
+          grep -q "/photo-swipe-cleaner/_expo/static/js/web" pages-staging/demo/index.html
+          # The app's own screens must not be published. `index` is deliberately
+          # absent from this list: pages-staging/index.html is the Case Study's
+          # own page, and the grep above already proves it is not the Expo shell.
+          for route in photos review permission scope about feedback _sitemap +not-found; do
+            test ! -f "pages-staging/$route.html" || { echo "unexpected $route.html in artifact"; exit 1; }
+          done
+          echo "artifact checks passed"
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: showcase
+          path: pages-staging
 
       - name: Deploy
         id: deployment
