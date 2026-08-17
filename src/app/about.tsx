@@ -2,12 +2,11 @@ import { useRouter } from 'expo-router';
 import type { ReactNode } from 'react';
 import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
-import { CheckIcon, PhotoIcon, ShieldIcon, TrashIcon } from '@/components/icons';
+import { CheckIcon, PhotoIcon, ShieldIcon, TrashIcon, WarnIcon } from '@/components/icons';
 import { PixelBadge } from '@/components/pixel/pixel-badge';
 import { PixelSurface } from '@/components/pixel/pixel-surface';
 import { AppButton, Caption, Screen, Title } from '@/components/ui';
 import { APP_BUILD_LABEL, APP_NAME, APP_VERSION_LABEL } from '@/lib/app-info';
-import { MAX_DELETE_COUNT_PER_BATCH } from '@/lib/delete-service';
 import { colors, iconSize, spacing } from '@/lib/theme';
 import { textScaling, typeAccent, typeStyle } from '@/lib/typography';
 
@@ -36,8 +35,14 @@ const POINTS: Point[] = [
   },
   {
     title: '真正刪除需要確認頁與 iPhone 系統確認',
-    detail: `要先在確認頁檢查待刪除清單，按下刪除後 iPhone 還會再要求一次確認。每次最多 ${MAX_DELETE_COUNT_PER_BATCH} 張。`,
+    detail:
+      'App 不限制你在整理頁選取的照片張數。刪除時會將本次選取一次送出，並由 iPhone 顯示系統確認。',
     icon: <CheckIcon size={iconSize.md} fill={colors.keep} />,
+  },
+  {
+    title: '大量照片需要多一點時間',
+    detail: '大量照片可能需要較長處理時間，請在系統確認與儲存完成前保持 App 開啟。',
+    icon: <WarnIcon size={iconSize.md} fill={colors.warning} />,
   },
   {
     title: '已刪除照片可前往「最近刪除」查看',

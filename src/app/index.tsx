@@ -9,7 +9,6 @@ import { PixelSurface } from '@/components/pixel/pixel-surface';
 import { AppButton, Body, Caption, Screen, Title } from '@/components/ui';
 import { useOnboarding } from '@/hooks/use-onboarding';
 import { APP_BUILD_LABEL, APP_NAME, APP_VERSION_LABEL } from '@/lib/app-info';
-import { MAX_DELETE_COUNT_PER_BATCH } from '@/lib/delete-service';
 import { getPhotoAccessAsync } from '@/lib/photos';
 import { colors, iconSize, spacing } from '@/lib/theme';
 import { textScaling, typeAccent, typeStyle } from '@/lib/typography';
@@ -84,7 +83,8 @@ export default function HomeScreen() {
         tone="warning"
         title={APP_BUILD_LABEL}
         icon={<WarnIcon size={iconSize.sm} fill={colors.warning} />}>
-        {`請先使用不重要的照片測試。每次最多刪除 ${MAX_DELETE_COUNT_PER_BATCH} 張。`}
+        請先使用不重要的照片測試。選好待刪照片後，App
+        會將本次選取一次送出，由 iPhone 再次確認。
       </PixelNotice>
 
       <View style={styles.footer}>
